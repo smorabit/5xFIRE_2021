@@ -1,0 +1,147 @@
+
+Following instructions from SCENIC protocol:
+https://www.nature.com/articles/s41596-020-0336-2
+
+```{bash eval=FALSE}
+
+cd ~/swaruplab/smorabit/analysis/FIRE_mouse_2021/SCENIC
+
+# create scenic conda env
+conda create -n scenic_protocol python=3.6
+conda activate scenic_protocol
+
+# install conda packages
+conda install numpy pandas matplotlib seaborn
+conda install -c anaconda cytoolz
+
+# install scanpy:
+conda install seaborn scikit-learn statsmodels numba pytables
+conda install -c conda-forge python-igraph leidenalg
+pip install scanpy
+
+# install pySCENIC
+pip install pyscenic
+
+# download TFs:
+wget https://raw.githubusercontent.com/aertslab/pySCENIC/master/resources/mm_mgi_tfs.txt
+
+# download motif to TF annotation database:
+wget https://resources.aertslab.org/cistarget/motif2tf/motifs-v9-nr.mgi-m0.001-o0.0.tbl
+
+# download genome ranking database:
+wget https://resources.aertslab.org/cistarget/databases/mus_musculus/mm10/refseq_r80/mc9nr/gene_based/mm10__refseq-r80__10kb_up_and_down_tss.mc9nr.feather
+
+
+```
+
+Format data for scenic from seurat:
+
+```{r eval=FALSE}
+
+library(Seurat)
+library(Matrix)
+library(tidyverse)
+
+setwd('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/SCENIC')
+data_dir <- 'data/'
+
+# load 4 condition seurat obj
+seurat_obj <- readRDS('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/FIRE_mouse_seurat_4_conditions.rds')
+
+
+# save data matrix:
+X <- GetAssayData(seurat_obj, assay='RNA', slot='data')
+Matrix::writeMM(X, file=paste0(data_dir, 'FIRE_mouse_normCounts.mtx'))
+
+
+
+# save gene names:
+write.table(
+  data.frame('gene'=rownames(X)),
+  file=paste0(data_dir, 'gene_names.csv'),
+  quote=F,
+  row.names=F,
+  col.names=F
+)
+
+# save harmony matrix as csv
+write.csv(seurat_obj@reductions$harmony@cell.embeddings, file=, paste0(data_dir, 'FIRE_mouse_harmony.csv'), quote=F, row.names=F)
+
+# save metadata:
+meta <- seurat_obj@meta.data
+meta$barcode <- colnames(seurat_obj)
+meta$UMAP1 <- seurat_obj@reductions$umap@cell.embeddings[,1]
+meta$UMAP2 <- seurat_obj@reductions$umap@cell.embeddings[,2]
+
+write.csv(meta, file=paste0(data_dir, 'FIRE_mouse_meta.csv'), quote=F, row.names=F)
+
+
+```
+
+Process data with scanpy:
+
+```{python eval=FALSE}
+# conda activate scenic_protocol
+import scanpy as sc
+import anndata
+from scipy import io
+from scipy.sparse import coo_matrix, csr_matrix
+import numpy as np
+import seaborn as sns
+from matplotlib import pyplot as plt
+import os
+import pandas as pd
+
+data_dir = "data/"
+
+# load sparse matrix:
+X = io.mmread("{}FIRE_mouse_normCounts.mtx".format(data_dir))
+
+# create anndata object
+adata = anndata.AnnData(
+    X=X.transpose().tocsr()
+)
+
+# load sample metadata:
+sample_meta = pd.read_csv("{}FIRE_mouse_meta.csv".format(data_dir))
+
+# load gene names:
+with open("{}gene_names.csv".format(data_dir), 'r') as f:
+    gene_names = f.read().splitlines()
+
+adata.obs = sample_meta
+adata.obs.index = adata.obs['barcode']
+adata.obs = adata.obs.drop(labels='barcode', axis=1)
+adata.var.index = gene_names
+adata.obs['n_counts'] = adata.obs['nCount_RNA']
+
+# create a loom file:
+import loompy as lp
+
+row_attrs = {
+"Gene": np.array(adata.var_names),
+}
+
+col_attrs = {
+"CellID": np.array(adata.obs_names),
+"nGene": np.array(np.sum(adata.X.transpose()>0, axis=0)).flatten(),
+"nUMI": np.array(np.sum(adata.X.transpose(),axis=0)).flatten(),
+}
+
+lp.create("data/FIRE_mouse_4-conditions.loom",adata.X.transpose(),row_attrs,
+col_attrs)
+
+```
+
+Run GRNBoos2 network inference:
+
+```{bash eval=FALSE}
+
+pyscenic grn \
+  --num_workers 32 \
+  --output adj.tsv \
+  --method grnboost2 \
+  data/FIRE_mouse_4-conditions.loom \
+  mm_mgi_tfs.txt
+
+```

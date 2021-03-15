@@ -1,0 +1,636 @@
+
+Exploratory data analysis for FIRE-mouse split-seq project
+
+## Load split-pipe data into Seurat
+
+```{r eval=FALSE}
+
+# in bash terminal:
+# conda activate spatial
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+theme_set(theme_cowplot())
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/")
+
+# directories
+splitpipe_outdir <- "~/swaruplab/smorabit/data/FIRE_mouse_2021/analysis/EDA/"
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load data:
+seurat_obj <- readRDS(paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+
+################################################################################
+# Load split-pipe data into Seurat
+################################################################################
+
+sublibraries <- paste0(splitpipe_outdir, dir(splitpipe_outdir), '/')
+
+seurat_list <- list()
+for(sublibrary in dir(splitpipe_outdir)){
+  print(sublibrary)
+  lib <- paste0(splitpipe_outdir, sublibrary, '/')
+
+  # load data from split-pipe
+  X <- Matrix::readMM(paste0(lib, 'all-well/DGE_filtered/DGE.mtx')) %>% t
+  genes <- read.csv(paste0(lib, 'all-well/DGE_filtered/genes.csv'))
+  lib_meta <- read.csv(paste0(lib, 'all-well/DGE_filtered/cell_metadata.csv'))
+  rownames(lib_meta) <- lib_meta$cell_barcode
+
+  # set row and col names for expression matrix X:
+  colnames(X) <- lib_meta$cell_barcode
+  rownames(X) <- genes$gene_name
+
+  # create seurat object
+  cur <- Seurat::CreateSeuratObject(
+    counts = X,
+    meta = lib_meta
+  )
+  cur$sublibrary <- sublibrary
+  seurat_list[[sublibrary]] <- cur
+}
+
+# merge seurat objects:
+seurat_obj <- merge(seurat_list[[1]], seurat_list[2:length(seurat_list)])
+rm(seurat_list); gc();
+
+# add sample metadata:
+sample_meta <- read.csv('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/splitseq_meta.csv')
+seurat_obj@meta.data <- cbind(seurat_obj@meta.data, sample_meta[match(as.character(seurat_obj$sample), as.character(sample_meta$SampleID)),])
+all.equal(as.character(seurat_obj$sample), as.character(seurat_obj$SampleID))
+
+
+```
+
+Quality Control:
+
+```{r eval=FALSE}
+
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(object = seurat_obj, pattern = "^mt-")
+pdf(paste0(fig_dir, "qc_violin_plot.pdf"), width=10, height=10)
+VlnPlot(seurat_obj, group.by="SampleID", features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, pt.size=0)
+dev.off()
+
+filter <- !(seurat_obj$nCount_RNA > 100000 | seurat_obj$percent.mt > 6 | seurat_obj$nFeature_RNA > 12000)
+
+seurat_obj <- seurat_obj[,filter]
+
+```
+
+Processing
+
+```{r eval=FALSE}
+
+# normalization
+seurat_obj <- NormalizeData(seurat_obj)
+seurat_obj <- ScaleData(seurat_obj, features=rownames(seurat_obj))
+seurat_obj <- FindVariableFeatures(seurat_obj, nfeatures=3500)
+
+# remove any mito genes from variable feature set:
+VariableFeatures(seurat_obj) <- VariableFeatures(seurat_obj)[!grepl("^mt-", VariableFeatures(seurat_obj))]
+
+# dim reduction
+seurat_obj <- RunPCA(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:30)
+
+# clustering
+# too many cells to use Leiden clustering unfortunately
+# https://github.com/satijalab/seurat/issues/2294
+seurat_obj <- FindNeighbors(seurat_obj)
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.75)
+
+# save processed seurat obj
+# saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat_noQC.rds'))
+
+
+```
+
+Visualization:
+
+```{r eval=FALSE}
+
+################################################################################
+# categorical variables
+################################################################################
+
+# UMAP + Clusters
+p <- DimPlot(seurat_obj, label=TRUE) + umap_theme
+pdf(paste0(fig_dir, 'umap_clusters.pdf'), width=8, height=7)
+p
+dev.off()
+
+# color by sample
+p <- DimPlot(seurat_obj, group.by='SampleID') + umap_theme
+pdf(paste0(fig_dir, 'umap_samples.pdf'), width=10, height=7)
+p
+dev.off()
+
+# highlight high percent.mt
+seurat_obj$high.mt <- seurat_obj$percent.mt > 5
+p <- DimPlot(seurat_obj, cells.highlight=colnames(seurat_obj)[seurat_obj$high.mt]) +
+  umap_theme + theme(legend.position='bottom') + ggtitle('% MT reads > 5')
+pdf(paste0(fig_dir, 'umap_high_mt.pdf'), width=6, height=6)
+p
+dev.off()
+
+# split by DX color by sample
+p <- DimPlot(seurat_obj, split.by='DX', group.by='SampleID', ncol=3) + umap_theme
+pdf(paste0(fig_dir, 'umap_sample_splitby_DX.pdf'), width=10, height=6)
+p
+dev.off()
+
+# split by DX:
+p <- DimPlot(seurat_obj, split.by='DX', group.by='DX', ncol=3) + umap_theme
+pdf(paste0(fig_dir, 'umap_DX_split.pdf'), width=8, height=6)
+p
+dev.off()
+
+# split by Sublibrary:
+p <- DimPlot(seurat_obj, split.by='sublibrary', group.by='sublibrary', ncol=4) + umap_theme
+pdf(paste0(fig_dir, 'umap_sublibrary_split.pdf'), width=12, height=6)
+p
+dev.off()
+
+################################################################################
+# quality control featureplots
+################################################################################
+p <- FeaturePlot(seurat_obj,features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, max.cutoff='q99', order=TRUE)
+
+pdf(paste0(fig_dir, 'featureplot_qc.pdf'), width=14, height=4, useDingbats=FALSE)
+p
+dev.off()
+
+#################################################################################
+# marker genes
+################################################################################
+
+markers <- c('Csf1r', 'Aqp4', 'Mobp', 'Pdgfra', 'Slc17a7', 'Gad2')
+pdf(paste0(fig_dir, 'featureplot_markers.pdf'), width=5, height=5, useDingbats=FALSE)
+
+for(gene in markers){
+  print(gene)
+  p1 <- FeaturePlot(seurat_obj, features=gene, max.cutoff='q99', order=TRUE) +
+    scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+    umap_theme + theme(legend.position='bottom')
+
+  print(p1)
+}
+dev.off()
+
+```
+
+Align samples using Harmony:
+
+```{r eval=FALSE}
+
+library(harmony)
+
+# harmony + umap:
+seurat_obj <- RunHarmony(seurat_obj, dims=1:20, group.by='SampleID')
+seurat_obj <- RunUMAP(seurat_obj, reduction='harmony', dims = 1:20, n.neighbors=15L, min.dist=0.10)
+# seurat_obj <- RunTSNE(seurat_obj, reduction='harmony', dims = 1:30)
+
+seurat_obj <- FindNeighbors(seurat_obj, dims=1:20, reduction='harmony', annoy.metric='cosine')
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.7)
+
+```
+
+Save processed seurat obj and format for scanpy:
+```{r eval=FALSE}
+library(SeuratDisk)
+
+# save as .rds
+saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+# save individual pieces of seurat object to load into python:
+
+# save data matrix:
+X <- GetAssayData(seurat_obj, assay='RNA', slot='data')
+Matrix::writeMM(X, file=paste0(data_dir, 'FIRE_mouse_normCounts.mtx'))
+
+# save gene names:
+write.table(
+  data.frame('gene'=rownames(X)),
+  file=paste0(data_dir, 'gene_names.csv'),
+  quote=F,
+  row.names=F,
+  col.names=F
+)
+
+# save harmony matrix as csv
+write.csv(seurat_obj@reductions$harmony@cell.embeddings, file=, paste0(data_dir, 'FIRE_mouse_harmony.csv'), quote=F, row.names=F)
+
+# save metadata:
+meta <- seurat_obj@meta.data
+meta$barcode <- colnames(seurat_obj)
+meta$UMAP1 <- seurat_obj@reductions$umap@cell.embeddings[,1]
+meta$UMAP2 <- seurat_obj@reductions$umap@cell.embeddings[,2]
+
+write.csv(meta, file=paste0(data_dir, 'FIRE_mouse_meta.csv'), quote=F, row.names=F)
+
+
+```
+
+Transfer scanpy data over to Seurat obj:
+```{r eval=FALSE}
+
+scanpy_meta <- read.csv(paste0(data_dir,'scanpy_meta.csv'))
+seurat_obj$leiden_res0.7 <- factor(scanpy_meta$leiden_res0.7, levels=min(scanpy_meta$leiden_res0.7):max(scanpy_meta$leiden_res0.7))
+seurat_obj$leiden_res1.5 <- factor(scanpy_meta$leiden_res1.5, levels=min(scanpy_meta$leiden_res1.5):max(scanpy_meta$leiden_res1.5))
+Idents(seurat_obj) <- seurat_obj$leiden_res1.5
+
+paga_umap <- as.matrix(select(scanpy_meta, c(paga_UMAP1, paga_UMAP2)))
+rownames(paga_umap) <- colnames(seurat_obj)
+seurat_obj@reductions$paga_umap <-  CreateDimReducObject(
+    embeddings=paga_umap,
+    key="umap_",
+    assay="RNA"
+)
+
+```
+
+Visualization
+
+```{r eval=FALSE}
+
+# UMAP + Clusters
+p <- DimPlot(seurat_obj, label=TRUE, reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_clusters.pdf'), width=8, height=7)
+p
+dev.off()
+
+p1 <- DimPlot(seurat_obj,  group.by='leiden_res0.7', label=TRUE, reduction='paga_umap') +
+ umap_theme + NoLegend() + ggtitle('Leiden clusters, resolution = 0.7')
+p2 <- DimPlot(seurat_obj, group.by='leiden_res1.5', label=TRUE, reduction='paga_umap') +
+  umap_theme + NoLegend() + ggtitle('Leiden clusters, resolution = 1.5')
+
+pdf(paste0(fig_dir, 'umap_clusters_compareRes.pdf'), width=12, height=6)
+p1 | p2
+dev.off()
+
+# color by sample
+p <- DimPlot(seurat_obj, group.by='SampleID', reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_samples.pdf'), width=10, height=7)
+p
+dev.off()
+
+# split by DX color by sample
+p <- DimPlot(seurat_obj, split.by='DX', group.by='SampleID', ncol=3, reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_sample_splitby_DX.pdf'), width=10, height=6)
+p
+dev.off()
+
+# split by DX:
+p <- DimPlot(seurat_obj, split.by='DX', group.by='DX', ncol=3,reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_DX_split.pdf'), width=8, height=6)
+p
+dev.off()
+
+# split by Sublibrary:
+p <- DimPlot(seurat_obj, split.by='sublibrary', group.by='sublibrary', ncol=4, reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_sublibrary_split.pdf'), width=12, height=6)
+p
+dev.off()
+
+#################################################################################
+# marker genes
+################################################################################
+
+markers <- c('Csf1r', 'Aqp4', 'Mobp', 'Pdgfra', 'Slc17a7', 'Gad2')
+pdf(paste0(fig_dir, 'featureplot_markers.pdf'), width=5, height=5, useDingbats=FALSE)
+
+for(gene in markers){
+  print(gene)
+  p1 <- FeaturePlot(seurat_obj, features=gene, max.cutoff='q99', order=TRUE, reduction='paga_umap') +
+    scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+    umap_theme + theme(legend.position='bottom')
+
+  print(p1)
+}
+dev.off()
+
+
+markers <- c('Csf1r', 'Cx3cr1', 'Cd163', 'Tnc', 'Gfap', 'Aqp4', 'Mobp', 'Mog', 'Pdgfra', 'Slc17a7', 'Rorb', 'Themis', 'Nrgn', 'Gad2', 'Vip', 'Pvalb', 'Sst', 'Lamp5')
+p <- DotPlot(seurat_obj, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256)))
+pdf(paste0(fig_dir, 'dotplot_markers.pdf'), width=12, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+# plot MG in each condition
+mg_genes <- c('Csf1r')
+p <- VlnPlot(subset(seurat_obj, seurat_clusters==20), features=mg_genes, group.by='DX', pt.size=0.1, ncol=1) + xlab('') + NoLegend()
+pdf(paste0(fig_dir, 'harmony_vlnplot_MG.pdf'), width=6, height=3, useDingbats=FALSE)
+p
+dev.off()
+
+
+
+```
+
+Test two different filtering options:
+Filter doublets or filter based on UMIs:
+
+```{r eval=FALSE}
+
+#################################################################################
+# Highlight potential doublets based on marker gene presence:
+################################################################################
+
+# how many cells are potential doublets?
+potential_doublets <- c(18, 23, 26, 28, 30, 31, 35, 39)
+table(seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets)
+
+p1 <- DimPlot(seurat_obj, reduction='paga_umap', cells.highlight=colnames(seurat_obj)[seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets]) + umap_theme  + ggtitle('Potential Doublets') + theme(legend.position='bottom', plot.title = element_text(hjust = 0.5)) + NoLegend()
+
+p2 <- FeaturePlot(seurat_obj, reduction='paga_umap', feature='nCount_RNA', order=TRUE)  +
+    scale_color_gradientn(colors=rev(magma(256)), guide = guide_colorbar(barwidth=0.5, barheight=10, ticks=FALSE)) +
+    umap_theme
+
+pdf(paste0(fig_dir, 'umap_potential_doublets.pdf'), width=10, height=5)
+p1 + p2
+dev.off()
+
+
+# plot UMAP with high quality cells only:
+
+p3 <- DimPlot(seurat_obj, reduction='paga_umap', label=TRUE, cells.highlight=colnames(seurat_obj)[seurat_obj$nCount_RNA > 60000]) + NoLegend() + umap_theme + ggtitle('nCount_RNA > 60,000') + theme(legend.position='bottom', plot.title = element_text(hjust = 0.5)) + NoLegend()
+pdf(paste0(fig_dir, 'umap_high_quality.pdf'), width=10, height=5)
+p1 + p3
+dev.off()
+
+# how many cells would we get rid of?
+potential_doublets <- c(18, 23, 26, 28, 30, 31, 35, 39)
+table(seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets)
+
+table(seurat_obj$nCount_RNA >= 50000)
+
+
+#################################################################################
+# Highlight potential doublets based on marker gene presence:
+################################################################################
+
+# re-load seurat obj
+seurat_obj <- readRDS(paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+scanpy_meta <- read.csv(paste0(data_dir,'scanpy_meta.csv'))
+seurat_obj$leiden_res0.7 <- factor(scanpy_meta$leiden_res0.7, levels=min(scanpy_meta$leiden_res0.7):max(scanpy_meta$leiden_res0.7))
+seurat_obj$leiden_res1.5 <- factor(scanpy_meta$leiden_res1.5, levels=min(scanpy_meta$leiden_res1.5):max(scanpy_meta$leiden_res1.5))
+Idents(seurat_obj) <- seurat_obj$leiden_res1.5
+
+paga_umap <- as.matrix(select(scanpy_meta, c(paga_UMAP1, paga_UMAP2)))
+rownames(paga_umap) <- colnames(seurat_obj)
+seurat_obj@reductions$paga_umap <-  CreateDimReducObject(
+    embeddings=paga_umap,
+    key="umap_",
+    assay="RNA"
+)
+
+# filter (we are using the doublet filter)
+potential_doublets <- c(18, 23, 26, 28, 30, 31, 35, 39)
+filter <- !(seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets); name <- 'doublet_filter'
+# filter <- !(seurat_obj$nCount_RNA > 50000); name <- 'UMI_filter'
+# filter <- !(seurat_obj$nCount_RNA > 50000 | seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets); name <- 'both_filters'
+# table(filter)
+
+seurat_obj <- seurat_obj[,filter]
+
+
+# processing:
+seurat_obj <- FindVariableFeatures(seurat_obj, nfeatures=3500)
+VariableFeatures(seurat_obj) <- VariableFeatures(seurat_obj)[!grepl("^mt-", VariableFeatures(seurat_obj))]
+seurat_obj <- RunPCA(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunHarmony(seurat_obj, dims=1:20, group.by='SampleID')
+seurat_obj <- RunUMAP(seurat_obj, reduction='harmony', dims = 1:20, n.neighbors=15L, min.dist=0.10)
+seurat_obj <- FindNeighbors(seurat_obj, dims=1:20, reduction='harmony', annoy.metric='cosine')
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.7)
+
+# plot resulting UMAP:
+p1 <- DimPlot(seurat_obj, group.by='seurat_clusters', label=TRUE) + umap_theme + NoLegend() + ggtitle('seurat clusters') + theme(plot.title = element_text(hjust = 0.5))
+p2 <- DimPlot(seurat_obj, group.by='leiden_res1.5', label=TRUE) + umap_theme + NoLegend() + ggtitle('leiden clusters') + theme(plot.title = element_text(hjust = 0.5))
+
+pdf(paste0(fig_dir, 'umap_', name, '_clusters.pdf'), width=10, height=5)
+p1 + p2
+dev.off()
+
+
+# marker gene dortplot
+markers <- c('Rgs5', 'Mybpc1', 'Dnah11', 'Slc47a1', 'Slc6a13','Csf1r', 'Cx3cr1', 'Cd163', 'Tnc', 'Gfap', 'Aqp4', 'Mobp', 'Mog', 'Pdgfra', 'Slc17a7', 'Rorb', 'Themis', 'Nrgn', 'Gad2', 'Vip', 'Pvalb', 'Sst', 'Lamp5')
+p <- DotPlot(seurat_obj, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'dotplot_markers_', name, '.pdf'), width=12, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+pdf(paste0(fig_dir, 'umap_and_dotplot_markers_', name, '.pdf'), width=14, height=6, useDingbats=FALSE)
+p1 + p
+dev.off()
+
+
+
+# save seurat object
+
+saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+# save individual pieces of seurat object to load into python:
+
+# save data matrix:
+X <- GetAssayData(seurat_obj, assay='RNA', slot='data')
+Matrix::writeMM(X, file=paste0(data_dir, 'FIRE_mouse_normCounts.mtx'))
+
+# save gene names:
+write.table(
+  data.frame('gene'=rownames(X)),
+  file=paste0(data_dir, 'gene_names.csv'),
+  quote=F,
+  row.names=F,
+  col.names=F
+)
+
+# save harmony matrix as csv
+write.csv(seurat_obj@reductions$harmony@cell.embeddings, file=, paste0(data_dir, 'FIRE_mouse_harmony.csv'), quote=F, row.names=F)
+
+# save metadata:
+meta <- seurat_obj@meta.data
+meta$barcode <- colnames(seurat_obj)
+meta$UMAP1 <- seurat_obj@reductions$umap@cell.embeddings[,1]
+meta$UMAP2 <- seurat_obj@reductions$umap@cell.embeddings[,2]
+
+write.csv(meta, file=paste0(data_dir, 'FIRE_mouse_meta.csv'), quote=F, row.names=F)
+
+
+```
+
+
+
+Transfer this scanpy data over to Seurat obj:
+```{r eval=FALSE}
+
+scanpy_meta <- read.csv(paste0(data_dir,'scanpy_meta.csv'))
+seurat_obj$leiden_res0.7 <- factor(scanpy_meta$leiden_res0.7, levels=min(scanpy_meta$leiden_res0.7):max(scanpy_meta$leiden_res0.7))
+seurat_obj$leiden_res1.5 <- factor(scanpy_meta$leiden_res1.5, levels=min(scanpy_meta$leiden_res1.5):max(scanpy_meta$leiden_res1.5))
+Idents(seurat_obj) <- seurat_obj$leiden_res0.7
+
+paga_umap <- as.matrix(select(scanpy_meta, c(paga_UMAP1, paga_UMAP2)))
+rownames(paga_umap) <- colnames(seurat_obj)
+seurat_obj@reductions$paga_umap <-  CreateDimReducObject(
+    embeddings=paga_umap,
+    key="umap_",
+    assay="RNA"
+)
+
+# save seurat obj:
+saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+# UMAP + Clusters
+p <- DimPlot(seurat_obj, label=TRUE, reduction='paga_umap') + umap_theme
+pdf(paste0(fig_dir, 'umap_clusters_final.pdf'), width=8, height=7)
+p
+dev.off()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Cluster DEGS:
+```{r eval=FALSE}
+
+de_markers <- FindAllMarkers(
+  seurat_obj,
+  test.use = "MAST",
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.5
+)
+save(de_markers, paste0(data_dir, 'leiden1.5_markers.rda'))
+saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+
+
+# use presto for fast results:
+library(presto)
+
+presto_markers <- presto::wilcoxauc(seurat_obj, 'leiden_res1.5')
+save(presto_markers, file=paste0(data_dir, 'presto_markers.rda'))
+
+
+# how many cells are potential doublets?
+potential_doublets <- c(18, 23, 26, 28, 30, 31, 35, 39)
+seurat_obj$potential_doublets <-
+table(seurat_obj@meta.data$leiden_res1.5 %in% potential_doublets)
+
+```
+
+
+
+<!--
+
+Integrate conditions using Liger:
+```{r eval=FALSE}
+
+library(liger)
+
+counts <- GetAssayData(seurat_obj, slot='counts')
+
+counts_list <- list(
+  '5x-Mut-CELL' = counts[,seurat_obj$DX == '5x-Mut-CELL'],
+  '5x-Mut-NA' = counts[,seurat_obj$DX == '5x-Mut-NA'],
+  '5x-Mut-PBS' = counts[,seurat_obj$DX == '5x-Mut-PBS'],
+  '5x-Wt-NA' = counts[,seurat_obj$DX == '5x-Wt-NA'],
+  'Wt-Mut-NA' = counts[,seurat_obj$DX == 'Wt-Mut-NA'],
+  'Wt-Wt-NA' = counts[,seurat_obj$DX == 'Wt-Wt-NA']
+)
+
+
+a.NucSeq <- createLiger(counts_list)
+a.NucSeq <- normalize(a.NucSeq)
+pdf(paste0(fig_dir, "liger_variable_genes.pdf"), width=8, height=8)
+a.NucSeq <- selectGenes(a.NucSeq, var.thresh =c(0.2, 0.1, 0.2, 0.125, 0.125, 0.2), do.plot=T)
+dev.off()
+a.NucSeq <- scaleNotCenter(a.NucSeq)
+
+# perform online iNMF
+a.NucSeq = online_iNMF(a.NucSeq, k = 30, max.epochs = 5)
+
+# quantile normalization
+a.NucSeq  = quantile_norm(a.NucSeq)
+a.NucSeq  = runUMAP(a.NucSeq)
+
+pdf(paste0(fig_dir, 'liger_umap.pdf'), width=8, height=8)
+plotByDatasetAndCluster(a.NucSeq, axis.labels = c("UMAP1","UMAP2"))
+dev.off()
+
+pdf(paste0(fig_dir, 'liger_featureplot.pdf'), width=5, height=5)
+plotGene(a.NucSeq, 'Mog', return.plots=F)
+dev.off()
+
+# transfer to seurat object:
+seurat_obj@reductions$iNMF <-  CreateDimReducObject(
+    loadings=t(a.NucSeq@W),
+    embeddings=a.NucSeq@H.norm[colnames(seurat_obj),],
+    key="iNMF_",
+    assay="RNA"
+  )
+VariableFeatures(seurat_obj) <- a.NucSeq@var.genes
+
+seurat_obj <- RunUMAP(seurat_obj, reduction='iNMF', dims = 1:30)
+seurat_obj <- FindNeighbors(seurat_obj, reduction='iNMF')
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.75)
+
+
+# UMAP + Clusters
+p <- DimPlot(seurat_obj, label=TRUE) + umap_theme
+pdf(paste0(fig_dir, 'umap_inmf_clusters.pdf'), width=8, height=7)
+p
+dev.off()
+
+# color by sample
+p <- DimPlot(seurat_obj, group.by='SampleID') + umap_theme
+pdf(paste0(fig_dir, 'umap_inmf_samples.pdf'), width=10, height=7)
+p
+dev.off()
+
+``` -->

@@ -1,0 +1,458 @@
+
+
+After filtering low-quality cells and doublets, UMAP + clustering, we can
+start annotating clusters based on cell-type identities.
+
+* Investigate expression literature-curated cell-type marker genes
+* quick and dirty DEG analysis using Presto
+* Annotation based on above information
+* Composition of major cell-types
+  - sublibrary
+  - sample
+  - condition
+
+After this, we can re-embed and sub-cluster each of the major types, and perform
+a more thorough DEG analysis using MAST (separate notebook).
+
+# Load data
+
+```{r eval=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+library(RColorBrewer)
+library(patchwork)
+library(ggpubr)
+theme_set(theme_cowplot())
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/")
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load data
+seurat_obj <- readRDS(file=paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/composition")
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+```
+
+# Expression of literature-curated marker genes:
+
+```{r eval=FALSE}
+
+seurat_obj <- readRDS('EDA/data/FIRE_mouse_seurat.rds')
+
+marker_list <- list(
+  'EX' = c('Slc17a7', 'Lamp5', 'Rorb'),
+  'INH' = c('Gad1', 'Gad2', 'Slc32a1', 'Vip', 'Sst', 'Pvalb'),
+  'ASC' = c('Aqp4', 'Gfap', 'Slc7a10', 'Prdm16', 'Tnc'),
+  'MG' = c('Csf1r', 'Cx3cr1'),
+  'Mature-ODC' = c('Mog', 'Klk6', 'Mobp'),
+  'Mf-ODC' = c('Opalin', 'Plp1', 'Cnp', 'Sox10'),
+  'Nf-ODC' = c('Tcf7l2', 'Itpr2', 'Tmem2'),
+  'COP' = c('Sox6', 'Nkx2-2', 'Bmp4', 'Vcan'),
+  'OPC' = c('Pdgfra', 'Cspg4', 'Ptprz1'),
+  'VLMC' = c('Vtn', 'Slc47a1', 'Slc6a13'),
+  'OEC' = c('Mybpc1'),
+  'END' = c('Rgs5'),
+  'EPD' = c('Dnah11')
+)
+
+
+
+dir.create(paste0(fig_dir, 'literature_markers'))
+
+# make a dot plot for all markers:
+p <- DotPlot(seurat_obj, features=as.character(unlist(marker_list)), dot.min=0.1, group.by='clusternum_anno') + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'literature_markers/all_clusters_markers_dotplot.pdf'), width=12, height=8, useDingbats=FALSE)
+p
+dev.off()
+
+# violin plots for each of these markers:
+for(i in 1:length(marker_list)){
+
+  markers = as.character(unlist(marker_list[i]))
+  name = names(marker_list)[i]
+  print(name)
+
+  # violin plot for these genes
+  plot_list <- VlnPlot(seurat_obj, features=markers, pt.size=0, combine=FALSE)
+  pdf(paste0(fig_dir, 'literature_markers/', name, '_markers_vlnplot.pdf'), width=7, height=2)
+  for(p in plot_list){
+    p <- p + xlab('') + ylab('') + NoLegend()
+    print(p)
+  }
+  dev.off()
+
+  # dot plot for these genes:
+  p <- DotPlot(seurat_obj, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+  pdf(paste0(fig_dir, 'literature_markers/', name, '_markers_dotplot.pdf'), width=8, height=1.5 + (length(markers)*0.5), useDingbats=FALSE)
+  print(p)
+  dev.off()
+
+}
+
+```
+
+# Annotations based on these markers:
+
+```{r eval=FALSE}
+
+annot_df <- data.frame(
+  annotation = c(
+    'INH',
+    'EX',
+    'INH',
+    'EX',
+    'ASC',
+    'EX',
+    'EX',
+    'EX',
+    'INH',
+    'END',
+    'INH',
+    'ODC',
+    'EX',
+    'EX',
+    'EX',
+    'INH',
+    'MG',
+    'OPC',
+    'EX',
+    'VLMC',
+    'Neuron (Doublet?)',
+    'EPD',
+    'EX',
+    'EPD',
+    'OEC',
+    'Neuron (Doublet?)'
+  ),
+  clusters = 0:max(as.numeric(as.character(Idents(seurat_obj))))
+)
+
+seurat_obj$cluster_anno <- annot_df$annotation[match(as.numeric(as.character(Idents(seurat_obj))), annot_df$clusters)]
+seurat_obj$cluster_anno <- factor(as.character(seurat_obj$cluster_anno), levels=unique(as.character(annot_df$annotation)))
+
+# cluster number + annotation
+seurat_obj$clusternum_anno <- paste0(as.numeric(as.character(seurat_obj$leiden_res0.7)), '-', as.character(seurat_obj$cluster_anno))
+
+# plot UMAP
+p <- DimPlot(seurat_obj, label=TRUE, reduction='paga_umap', group.by='clusternum_anno') + umap_theme
+pdf(paste0(fig_dir, 'umap_clusters_annotated.pdf'), width=10, height=7)
+p
+dev.off()
+
+# plot nUMI
+p2 <- FeaturePlot(seurat_obj, reduction='paga_umap', feature='nCount_RNA', order=TRUE)  +
+    scale_color_gradientn(colors=rev(magma(256)), guide = guide_colorbar(barwidth=0.5, barheight=10, ticks=FALSE)) +
+    umap_theme
+
+p3 <- VlnPlot(seurat_obj, features='nCount_RNA', group.by='clusternum_anno', pt.size=0) + xlab('') + ylab('') + NoLegend()
+
+pdf(paste0(fig_dir, 'clusters_and_nUMI.pdf'), width=10, height=10)
+patch <- (p + NoLegend() + ggtitle('annotated clusters') +  theme(plot.title = element_text(hjust = 0.5))) + p2
+patch / p3 + plot_layout(heights=c(2,1))
+dev.off()
+
+#################################################################################
+#  Remove potential doublet clusters 21 and 26:
+################################################################################
+
+seurat_obj <- seurat_obj[,!c(seurat_obj$leiden_res0.7 %in% c(20, 25))]
+
+
+p <- DimPlot(seurat_obj, label=TRUE, reduction='paga_umap', group.by='clusternum_anno') + umap_theme
+pdf(paste0(fig_dir, 'umap_clusters_annotated.pdf'), width=10, height=7)
+p
+dev.off()
+
+celltype_color.scheme <- brewer.pal(10, 'Paired')
+p <- DimPlot(seurat_obj, reduction='paga_umap', group.by='cluster_anno') + umap_theme +
+  scale_color_manual(values=celltype_color.scheme)
+pdf(paste0(fig_dir, 'umap_celltypes_annotated.pdf'), width=6, height=5)
+p
+dev.off()
+
+# save seurat obj:
+saveRDS(seurat_obj, file=paste0(data_dir, 'FIRE_mouse_seurat.rds'))
+
+```
+
+Expression of canonical marker genes in each major cell type
+* Heatmap
+* VlnPlot
+* DotPlot
+
+```{r eval=FALSE}
+
+markers <- c('Slc17a7', 'Gad2', 'Aqp4', 'Rgs5', 'Mog', 'Csf1r', 'Pdgfra', 'Slc47a1', 'Dnah11', 'Mybpc1')
+
+seurat_obj$cluster_anno <- factor(
+  as.character(seurat_obj$cluster_anno),
+  levels=c('EX', 'INH', 'ASC', 'END', 'ODC', 'MG', 'OPC', 'VLMC', 'EPD', 'OEC')
+)
+
+p <- DoHeatmap(seurat_obj, features=markers, group.by='cluster_anno', label=FALSE) +
+  scale_fill_gradientn(colors=viridis(256))
+
+pdf(paste0(fig_dir, 'heatmap_canonical_markers.pdf'), width=10, height=5)
+p
+dev.off()
+
+
+```
+
+
+Dataset composition by major cell types:
+
+* How many cells of each cell type?
+* How many cells in each sample? (Split by DX group)
+
+```{r eval=FALSE}
+
+# change the name of the different groups:
+# seurat_obj$group <- seurat_obj$DX
+# group_df <- data.frame(
+#   'group' = c('WT', '5xFAD', 'FIRE', '5xFIRE', '5xFIRE + PBS', '5xFIRE + transplant'),
+#   'DX' = c('Wt-Wt-NA', '5x-Wt-NA', 'Wt-Mut-NA', '5x-Mut-NA', '5x-Mut-PBS', '5x-Mut-CELL'),
+#   stringsAsFactors=FALSE
+# )
+#
+# seurat_obj$DX <- factor(
+#   group_df$group[match(as.character(seurat_obj$group), as.character(group_df$DX))],
+#   levels = c('WT', '5xFAD', 'FIRE', '5xFIRE', '5xFIRE + PBS', '5xFIRE + transplant')
+# )
+
+#################################################################################
+# number of cells of each major cell type:
+#################################################################################
+
+df <- as.data.frame(table(droplevels(seurat_obj$class)))
+
+p <- ggplot(df, aes(x=reorder(Var1, -Freq), y=Freq, fill=Var1)) +
+  geom_bar(stat='identity') + NoLegend() + RotatedAxis() + ylab(expression(italic(N)[cells])) + xlab('') +
+  geom_text(aes(label=scales::comma(Freq)),  color="black", size=3.5) +
+  scale_y_continuous(labels=scales::comma) +
+  ggtitle(paste('Total number of cells post-filtering:', scales::comma(ncol(seurat_obj)))) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.minor=element_blank(),
+    panel.grid.major.y=element_line(colour="lightgray", size=0.5),
+    axis.ticks.x=element_blank(),
+  )
+
+pdf(paste0(fig_dir, 'barplot_nCells_celltypes.pdf'), width=6, height=3)
+p
+dev.off()
+
+#################################################################################
+# number of cells of each cluster
+#################################################################################
+
+df <- as.data.frame(table((seurat_obj$clusternum_anno)))
+
+p <- ggplot(df, aes(x=reorder(Var1, Freq), y=Freq, fill=Var1)) +
+  geom_bar(stat='identity') + NoLegend() + RotatedAxis() + ylab(expression(italic(N)[cells])) + xlab('') +
+  geom_text(aes(label=scales::comma(Freq)),  color="black", size=3.5, hjust='inward') +
+  scale_y_continuous(labels=scales::comma) +
+  coord_flip() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.minor=element_blank(),
+    panel.grid.major.x=element_line(colour="lightgray", size=0.5),
+    axis.ticks.x=element_blank(),
+  )
+
+pdf(paste0(fig_dir, 'barplot_nCells_clusters.pdf'), width=4, height=8)
+p
+dev.off()
+
+
+#################################################################################
+# number of cells in each sample:
+#################################################################################
+
+df <- as.data.frame(table(seurat_obj$SampleID))
+df$group <- factor(
+  as.character(seurat_obj@meta.data$DX)[match(as.character(df$Var1), seurat_obj@meta.data$SampleID)],
+  levels = levels(seurat_obj$DX)
+)
+
+p <- ggplot(df, aes(x=reorder(Var1, Freq), y=Freq, fill=Var1, )) +
+  geom_bar(stat='identity') +
+  geom_text(aes(label=scales::comma(Freq)),  color="black", size=3.5, hjust='inward') +
+  scale_y_continuous(labels=scales::comma) +
+  scale_fill_manual(values=color.scheme) +
+  coord_flip() + NoLegend() + RotatedAxis() + xlab('') +  ylab(expression(italic(N)[cells])) +
+  ggtitle('Number of cells per sample in each condition') + theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.minor=element_blank(),
+    panel.grid.major.x=element_line(colour="lightgray", size=0.5),
+    axis.ticks.y=element_blank(),
+  )
+
+pdf(paste0(fig_dir, 'barplot_nCells_samples.pdf'), width=7, height=6)
+p + facet_wrap(~group, scales='free_y', ncol=3)
+dev.off()
+
+# umap colored by sample:
+p <- DimPlot(seurat_obj, split.by='DX', group.by='SampleID', ncol=3, reduction='paga_umap') +
+  umap_theme + scale_color_manual(values=color.scheme)
+pdf(paste0(fig_dir, 'umap_sample_splitby_DX.pdf'), width=10, height=6)
+p
+dev.off()
+
+
+
+#################################################################################
+# number of cells in each sublibrary
+#################################################################################
+
+df <- as.data.frame(table((seurat_obj$sublibrary)))
+
+p <- ggplot(df, aes(x=reorder(Var1, -Freq), y=Freq, fill=Var1)) +
+  geom_bar(stat='identity') + NoLegend() + RotatedAxis() + ylab(expression(italic(N)[cells])) + xlab('') +
+  scale_y_continuous(labels=scales::comma) +
+  geom_text(aes(label=scales::comma(Freq)),  color="black", size=3.5) +
+  ggtitle('Number of cells per sublibrary') +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.minor=element_blank(),
+    panel.grid.major.y=element_line(colour="lightgray", size=0.5),
+    axis.ticks.x=element_blank(),
+  )
+
+pdf(paste0(fig_dir, 'barplot_nCells_sublibrary.pdf'), width=6, height=3)
+p
+dev.off()
+
+# umap colored by sublibrary
+p <- DimPlot(seurat_obj,  group.by='sublibrary', reduction='paga_umap') +
+  umap_theme
+pdf(paste0(fig_dir, 'umap_sublibrary.pdf'), width=7, height=6)
+p
+dev.off()
+
+# umap colored by sublibrary
+p <- DimPlot(seurat_obj, split.by='sublibrary', group.by='sublibrary', reduction='paga_umap', ncol=4) +
+  umap_theme + NoLegend()
+pdf(paste0(fig_dir, 'umap_sublibrary_split.pdf'), width=12, height=6)
+p
+dev.off()
+
+#################################################################################
+# Proportion of major cell types
+#################################################################################
+
+seurat_meta <- seurat_obj@meta.data %>% subset(class %in% c('INH', 'EX')); name='neuronal'; w=6;h=10;
+seurat_meta <- seurat_obj@meta.data %>% subset(!class %in% c('INH', 'EX')); name='non-neuronal'; w=6;h=10;
+
+#seurat_meta$cluster_anno <- droplevels(seurat_meta$cluster_anno)
+
+meta_list <- seurat_meta%>%
+  dplyr::group_split(SampleID)
+
+temp <- lapply(meta_list, function(meta){
+  df <- as.data.frame(meta$clusternum_anno %>% table / nrow(meta))
+  colnames(df) <- c('cluster', 'proportion')
+  df$SampleID <- unique(meta$SampleID)
+  df$DX <- unique(meta$DX)
+  df
+})
+
+proportion_df <- Reduce(rbind, temp)
+proportion_df$cluster_num <- as.numeric(proportion_df$cluster)
+
+#
+#
+# sample_color.scheme <- c(
+#   brewer.pal(9, 'Greys')[5],
+#   brewer.pal(9, 'Purples')[7],
+#   brewer.pal(9, 'Oranges')[6],
+#   brewer.pal(9, 'Reds')[6],
+#   brewer.pal(9, 'Blues')[5],
+#   brewer.pal(9, 'Greens')[5]
+# )
+# names(sample_color.scheme) <- levels(seurat_obj$DX)
+#
+#
+# # set up comparison lists:
+comparisons <- list(c(2,1), c(5,3),  c(3,1), c(5,1))
+
+
+pdf(paste0(fig_dir, name,'_composition_boxplot.pdf'), width=5, height=3)
+plot_list <- list()
+for(cl in unique(proportion_df$cluster)){
+  cur_df <- subset(proportion_df, cluster==cl)
+  #m_df <- cur_df %>% group_by(DX) %>% summarize(median = mean(proportion))
+
+
+  p <- ggplot(cur_df, aes(y=proportion, x=reorder(DX, DX), fill=DX)) +
+    scale_x_discrete(limits=rev(levels(cur_df$DX))) +
+    #geom_bar(aes.inherit=FALSE, data=m_df, aes(y=median, x=DX, fill=DX), alpha=0.5, stat='identity') +
+    geom_boxplot(outlier.shape=NA, color='black', alpha=0.7) +
+    geom_jitter(aes(color=SampleID), size=1.5, width=0.25) +
+    scale_fill_manual(values=sample_color.scheme) +
+    scale_color_manual(values=color.scheme) +
+    ggtitle(cl) +
+    coord_flip() +
+    labs(fill='') + NoLegend() +
+    stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+    # scale_x_discrete(limits = rev(levels(cluster))) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      panel.grid.major.x=element_line(colour="lightgray", size=0.5),
+      axis.line.y = element_blank(),
+      axis.ticks.y = element_blank()
+    ) + xlab('') + ylab(paste('proportion', name))
+
+  print(p)
+  plot_list[[cl]] <- p
+}
+dev.off()
+
+
+
+# neuronal
+pdf(paste0(fig_dir, name,'_composition_boxplot_combined.pdf'), width=20, height=16)
+wrap_plots(plot_list, ncol=5)
+dev.off()
+
+# non-neuronal
+pdf(paste0(fig_dir, name,'_composition_boxplot_combined.pdf'), width=12, height=9)
+wrap_plots(plot_list, ncol=3)
+dev.off()
+
+
+```

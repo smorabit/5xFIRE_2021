@@ -1,0 +1,213 @@
+
+# Load data
+
+```{r eval=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+library(RColorBrewer)
+library(patchwork)
+library(ggpubr)
+theme_set(theme_cowplot())
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/")
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load data
+seurat_obj <- readRDS('EDA/data/FIRE_mouse_seurat.rds')
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+```
+
+
+# Doublet finding:
+
+```{r eval=FALSE}
+library(DoubletFinder)
+
+## pK Identification (no ground-truth) ---------------------------------------------------------------------------------------
+sweep.res.list <- paramSweep_v3(seurat_obj, PCs = 1:10, sct = FALSE)
+sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+bcmvn <- find.pK(sweep.stats)
+
+## Homotypic Doublet Proportion Estimate -------------------------------------------------------------------------------------
+homotypic.prop <- modelHomotypic(seurat_obj$leiden_res0.7)
+nExp_poi <- round(0.075*nrow(seurat_obj@meta.data))  ## Assuming 7.5% doublet formation rate - tailor for your dataset
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+
+
+## Run DoubletFinder with varying classification stringencies ----------------------------------------------------------------
+seurat_obj <- doubletFinder_v3(seurat_obj, PCs = 1:10, pN = 0.25, pK = 0.09, nExp = nExp_poi, reuse.pANN = FALSE, sct = FALSE)
+seurat_obj <- doubletFinder_v3(seurat_obj, PCs = 1:10, pN = 0.25, pK = 0.09, nExp = nExp_poi.adj, reuse.pANN = "pANN_0.25_0.09_5117", sct = FALSE)
+
+
+# plot doublets on UMAP:
+p <- DimPlot(seurat_obj, reduction='paga_umap', group.by='DF.classifications_0.25_0.09_5117', split.by='DF.classifications_0.25_0.09_5117') + umap_theme
+pdf(paste0(fig_dir, 'umap_doublets.pdf'), width=10, height=5)
+p
+dev.off()
+
+
+```
+
+# sub-cluster microglia removing doublets:
+
+```{r eval=FALSE}
+
+
+seurat_mg <- subset(seurat_obj, cluster_anno == 'MG')
+
+#################################################################################
+# re-analyze immune population
+#################################################################################
+
+seurat_mg <- FindVariableFeatures(seurat_mg, nfeatures=2000)
+VariableFeatures(seurat_mg) <- VariableFeatures(seurat_mg)[!grepl("^mt-", VariableFeatures(seurat_mg))]
+seurat_mg <- RunPCA(seurat_mg)
+seurat_mg <- RunHarmony(seurat_mg, dims=1:20, group.by='SampleID')
+seurat_mg <- RunUMAP(seurat_mg, reduction='harmony', dims = 1:20, n.neighbors=25L, min.dist=0.25)
+seurat_mg <- FindNeighbors(seurat_mg, dims=1:15, reduction='harmony', annoy.metric='cosine')
+seurat_mg <- FindClusters(seurat_mg, resolution = 0.5, algorithm=4)
+
+
+# plot sub-clusters
+p1 <- DimPlot(seurat_mg,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
+  umap_theme
+
+# plot csf1r
+p2 <- FeaturePlot(seurat_mg, features='Csf1r', order=TRUE) +
+  scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+  umap_theme + theme(legend.position='bottom')
+
+# plot doublets:
+p3<- DimPlot(seurat_mg, group.by='DF.classifications_0.25_0.09_5117', split.by='DF.classifications_0.25_0.09_5117') + umap_theme
+
+pdf(paste0(fig_dir, 'umap_immune_subclusters.pdf'), width=8, height=8)
+(p1 + p2) / p3
+dev.off()
+
+# marker gene dortplot
+markers <- c('Rgs5', 'Mybpc1', 'Dnah11', 'Slc47a1', 'Slc6a13','Csf1r', 'Cx3cr1', 'Cd163', 'Tnc', 'Gfap', 'Aqp4', 'Mobp', 'Mog', 'Pdgfra', 'Slc17a7', 'Rorb', 'Themis', 'Nrgn', 'Gad2', 'Vip', 'Pvalb', 'Sst', 'Lamp5')
+p <- DotPlot(seurat_mg, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'dotplot_markers.pdf'), width=12, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+
+#################################################################################
+# re-analyze immune population without Doublets
+#################################################################################
+seurat_mg <- subset(seurat_obj, cluster_anno == 'MG' & DF.classifications_0.25_0.09_5117 == 'Singlet')
+
+seurat_mg <- FindVariableFeatures(seurat_mg, nfeatures=2000)
+VariableFeatures(seurat_mg) <- VariableFeatures(seurat_mg)[!grepl("^mt-", VariableFeatures(seurat_mg))]
+seurat_mg <- RunPCA(seurat_mg)
+seurat_mg <- RunHarmony(seurat_mg, dims=1:20, group.by='SampleID')
+seurat_mg <- RunUMAP(seurat_mg, reduction='harmony', dims = 1:20, n.neighbors=25L, min.dist=0.25)
+seurat_mg <- FindNeighbors(seurat_mg, dims=1:15, reduction='harmony', annoy.metric='cosine')
+seurat_mg <- FindClusters(seurat_mg, resolution = 0.5, algorithm=4)
+
+
+# plot sub-clusters
+p1 <- DimPlot(seurat_mg,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
+  umap_theme
+
+# plot csf1r
+p2 <- FeaturePlot(seurat_mg, features='Csf1r', order=TRUE) +
+  scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+  umap_theme + theme(legend.position='bottom')
+
+# plot doublets:
+p3 <- VlnPlot(seurat_mg, features='nCount_RNA', pt.size=0.5) + NoLegend() + xlab('') + ylab('')
+
+pdf(paste0(fig_dir, 'umap_immune_subclusters_noDoublets.pdf'), width=8, height=8)
+print((p1 + p2) / p3 + plot_layout(heights=c(2,1)))
+dev.off()
+
+# marker gene dortplot
+markers <- c('Rgs5', 'Mybpc1', 'Dnah11', 'Slc47a1', 'Slc6a13','Csf1r', 'Cx3cr1', 'Cd163', 'Tnc', 'Gfap', 'Aqp4', 'Mobp', 'Mog', 'Pdgfra', 'Slc17a7', 'Rorb', 'Themis', 'Nrgn', 'Gad2', 'Vip', 'Pvalb', 'Sst', 'Lamp5')
+p <- DotPlot(seurat_mg, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'dotplot_markers_noDoublets.pdf'), width=12, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+
+```
+
+sub-clustering od ODC lineage just to see if the doublet problem is there too:
+
+```{r eval=FALSE}
+
+seurat_odc <- subset(seurat_obj, cluster_anno %in% c('ODC', 'OPC'))
+
+seurat_odc <- FindVariableFeatures(seurat_odc, nfeatures=2000)
+VariableFeatures(seurat_odc) <- VariableFeatures(seurat_odc)[!grepl("^mt-", VariableFeatures(seurat_odc))]
+seurat_odc <- RunPCA(seurat_odc)
+seurat_odc <- RunHarmony(seurat_odc, dims=1:20, group.by='SampleID')
+seurat_odc <- RunUMAP(seurat_odc, reduction='harmony', dims = 1:20, n.neighbors=25L, min.dist=0.25)
+seurat_odc <- FindNeighbors(seurat_odc, dims=1:15, reduction='harmony', annoy.metric='cosine')
+seurat_odc <- FindClusters(seurat_odc, resolution = 0.5, algorithm=4)
+
+
+# plot sub-clusters
+p1 <- DimPlot(seurat_odc,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
+  umap_theme
+
+# plot Mobp
+p2 <- FeaturePlot(seurat_odc, features='Mobp', order=TRUE) +
+  scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+  umap_theme + theme(legend.position='bottom')
+
+
+p3 <- FeaturePlot(seurat_odc, features='Pdgfra', order=TRUE) +
+  scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+  umap_theme + theme(legend.position='bottom')
+
+
+# plot doublets:
+p4 <- VlnPlot(seurat_odc, features='nCount_RNA', pt.size=0.5) + NoLegend() + xlab('') + ylab('')
+
+pdf(paste0(fig_dir, 'umap_oligo_subclusters.pdf'), width=12, height=8)
+print((p1 + p2 + p3) / p4 + plot_layout(heights=c(2,1)))
+dev.off()
+
+# marker gene dortplot
+markers <- c('Rgs5', 'Mybpc1', 'Dnah11', 'Slc47a1', 'Slc6a13','Csf1r', 'Cx3cr1', 'Cd163', 'Tnc', 'Gfap', 'Aqp4', 'Mobp', 'Mog', 'Pdgfra', 'Slc17a7', 'Rorb', 'Themis', 'Nrgn', 'Gad2', 'Vip', 'Pvalb', 'Sst', 'Lamp5')
+p <- DotPlot(seurat_odc, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'oligo_dotplot_markers.pdf'), width=12, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+```

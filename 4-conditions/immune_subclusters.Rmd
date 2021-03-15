@@ -1,0 +1,538 @@
+# Load data
+
+```{r eval=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+library(RColorBrewer)
+library(patchwork)
+library(ggpubr)
+theme_set(theme_cowplot())
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/immune_subclusters/")
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/FIRE_mouse_seurat_4_conditions.rds')
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+```
+
+
+Sub-clustering of immune population :
+
+```{r eval=FALSE}
+
+
+# re-load
+seurat_imm <- readRDS(file=paste0(data_dir, 'FIRE_mouse_4_conditions_immune_subclusters.rds'))
+
+# isolate immune population
+seurat_imm <- subset(seurat_obj, class == 'IMM')
+
+#################################################################################
+# re-analyze immune population
+#################################################################################
+
+seurat_imm <- FindVariableFeatures(seurat_imm, nfeatures=2000)
+VariableFeatures(seurat_imm) <- VariableFeatures(seurat_imm)[!grepl("^mt-", VariableFeatures(seurat_imm))]
+seurat_imm <- RunPCA(seurat_imm)
+seurat_imm <- RunHarmony(seurat_imm, dims=1:20, group.by='SampleID')
+seurat_imm <- RunUMAP(seurat_imm, reduction='harmony', dims = 1:20, n.neighbors=15L, min.dist=0.25)
+seurat_imm <- FindNeighbors(seurat_imm, dims=1:25, reduction='harmony', annoy.metric='cosine')
+seurat_imm <- FindClusters(seurat_imm, resolution = 0.5, algorithm=4)
+
+saveRDS(seurat_imm, paste0(data_dir, 'FIRE_mouse_4_conditions_immune_subclusters.rds'))
+
+#################################################################################
+# visualization:
+#################################################################################
+
+# umap of sub-clusters
+p1 <- DimPlot(seurat_imm,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
+  umap_theme
+
+pdf(paste0(fig_dir, 'umap_immune_subclusters.pdf'), width=5, height=5)
+p1
+dev.off()
+
+
+# umap of UMI
+p1 <- FeaturePlot(seurat_imm, features='nCount_RNA', order=TRUE) + umap_theme
+p2 <- VlnPlot(seurat_imm, features='nCount_RNA', group.by='seurat_clusters', pt.size=0) + NoLegend()
+pdf(paste0(fig_dir, 'umap_immune_subclusters_UMI.pdf'), width=10, height=5)
+p1 | p2 + plot_layout(widths=c(1,2))
+dev.off()
+
+g <- ggplot_build(p1)
+colors <- g$data[[1]]["colour"]
+groups <- g$data[[1]]['group']
+color_df <- unique(data.frame(colors, groups)) %>% arrange(group)
+color_df$seurat_clusters <- levels(seurat_imm$seurat_clusters)
+colors.use <- color_df$colour
+names(colors.use) <- color_df$seurat_clusters
+
+
+# visualize expression in subclusters
+markers <- c('Tmem19', 'Sall1', 'Olfml3', 'C1qa', 'Csf1r', 'P2ry12', 'Cx3cr1', 'Mrc1', 'Cd38', 'Lyve1', 'Ms4a7', 'Cd74', 'Cd80', 'Cd86', 'Il7r', 'Ccr7', 'Ms4a1', 'Nkg7', 'Cd8a', 'Plp1', 'Apoe', 'Trem2', 'Tyrobp')
+
+
+pdf(paste0(fig_dir, 'umap_immune_markers.pdf'), width=8, height=8)
+
+# plot umap colored by sample
+p <- DimPlot(seurat_imm,  group.by='DX', ncol=) +
+  umap_theme + scale_color_manual(values=sample_color.scheme)
+
+# plot vln plot for UMI
+pv <- VlnPlot(seurat_imm, features='nCount_RNA', pt.size=0.5) + NoLegend() + xlab('') + ylab('')
+
+print(p / pv + plot_layout(heights=c(2,1)))
+
+# plot marker gene vln and umap
+for(gene in markers){
+  p2 <- FeaturePlot(seurat_imm, features=gene, order=TRUE) +
+    scale_color_gradientn(colors=viridis(256), guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)) +
+    umap_theme + theme(legend.position='bottom')
+  p3 <- VlnPlot(seurat_imm, features=gene, pt.size=0.5) + NoLegend() + xlab('') + ylab('')
+  print((p1 + p2) / p3 + plot_layout(heights=c(2,1)))
+}
+dev.off()
+
+# dot plot of the same markers
+p <- DotPlot(seurat_imm, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'dotplot_immune_markers.pdf'), width=6, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+```
+
+
+DAM scores
+
+```{r eval=FALSE}
+
+
+homeostatic <- str_to_title(c('HEXB', 'CST3', 'CX3CR1', 'CTSD', 'CSF1R', 'CTSS', 'SPARC', 'TMSB4X', 'P2RY12', 'C1QA', 'C1QB'))
+stage1_DAM <- str_to_title(c('TYROBP', 'CTSB', 'APOE', 'B2M', 'FTH1'))
+stage2_DAM <- str_to_title(c('TREM2', 'AXL', 'CST7', 'CTSL', 'LPL', 'CD9', 'CSF1', 'ITGAX', 'CLEC7A', 'LILRB4', 'TIMP2'))
+
+seurat_imm <- AddModuleScore(
+  seurat_imm,
+  features=list('stage1_DAM'=stage1_DAM, 'stage2_DAM'=stage2_DAM, 'homeostatic'=homeostatic),
+  name=c('stage1_DAM', 'stage2_DAM', 'homeostatic')
+)
+
+
+comparisons <- list(c(2,4), c(1,3))
+
+p1 <- VlnPlot(seurat_imm, features='homeostatic3', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+geom_hline(yintercept = 0, linetype='dashed') +
+stat_summary(fun.data='mean_cl_boot', color='black') +
+stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+xlab('') + NoLegend() +
+ylim(c(-0.5,2.5))+ ggtitle('Homeostatic')
+
+p2 <- VlnPlot(seurat_imm, features='stage1_DAM1', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+geom_hline(yintercept = 0, linetype='dashed') +
+stat_summary(fun.data='mean_cl_boot', color='black') +
+stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+xlab('') + NoLegend() +
+ylim(c(-0.5,2.5))+ ggtitle('Stage 1 DAM')
+
+p3 <- VlnPlot(seurat_imm, features='stage2_DAM2', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+geom_hline(yintercept = 0, linetype='dashed') +
+stat_summary(fun.data='mean_cl_boot', color='black') +
+stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+xlab('') + NoLegend() +
+ylim(c(-0.5,2.5)) + ggtitle('Stage 2 DAM')
+
+
+range(seurat_obj$stage2_DAM2)
+range(seurat_obj$stage1_DAM1)
+range(seurat_obj$homeostatic3)
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX.pdf'), width=8, height=3)
+p1 | p2 | p3
+dev.off()
+
+
+
+```
+
+Gene signatures from myeloid neuroinflammation paper
+
+```{r eval=FALSE}
+
+gene_list <- list(
+  'Microglia_homeostatic' = c('Sparc', 'Hexb', 'Ctss', 'Csf1r'),
+  'CAMs' = c('Apoe', 'C1qc', 'Mrc1', 'Sepp1'),
+  'CAMs_disease' = c('Apoe', 'Cd74', 'H2-Eb1', 'H2-Aa'),
+  'Monocytes' = c('Lyz1', 'Lyz2', 'Chil3', 'Chil4', 'Ly6c2', 'Plac8'),
+  'Monocytes_disease' = c('Arg1', 'Lyz1', 'Lyz2', 'Fn1', 'Cd74', 'Hba-a1', 'Hba-a2', 'Hbb-bs', 'Prg4', 'Ly6c2', 'Thbs1', 'Plac8'),
+  'DCs' = c('Ccr7', 'Fscn1', 'Ccl5', 'Ccl22', 'Cd74', 'Ifitm1', 'H2-Ab1', 'H2-Aa'),
+  'Granulocytes' = c('S100a9', 'S100a8', 'Ngp', 'Lcn2', 'Retnlg', 'Ifitm1', 'Irg1', 'Hdc', 'Cxcr2', 'Mxd1'),
+  'Lymphocytes' = c('Hba-a1', 'Hba-a2', 'Lyz1', 'Lyz2', 'Pou2f2', 'Cybb'),
+  'Lymphocytes_disease' = c('Ttr', 'Igkc', 'Enpp2',  'Ighg2c', 'Ccl5', 'Gzma', 'Ms4a4b', 'Thy1', 'Ccl5', 'Icos', 'Trbc1', 'Trbc2', 'Prss34', 'Ly6c2', 'Vim', 'Mpo')
+)
+
+seurat_imm <- AddModuleScore(
+  seurat_imm,
+  features=gene_list,
+  name=names(gene_list)
+)
+
+features <- paste0(names(gene_list), 1:length(gene_list))
+
+
+comparisons <- list(c(2,4), c(1,3))
+
+pdf(paste0(fig_dir, 'vlnplot_prinz.pdf'), width=6, height=3)
+
+for(feat in features){
+  print(feat)
+  p1 <- VlnPlot(seurat_imm, features=feat, group.by='seurat_clusters', pt.size=0) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  #stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend()
+  #ylim(c(-0.5,2.5))
+  print(p1)
+}
+dev.off()
+
+
+``
+
+Label transfer scores:
+
+```{r eval=FALSE}
+
+features <- c('68 Astro Slc7a10',  '63 Microglia',  '62 Macrophage',  '57 Oligo MOL')
+
+# cluster violin plot:
+DefaultAssay(seurat_imm) <- 'predictions'
+
+pdf(paste0(fig_dir, 'vlnplot_LT.pdf'), width=6, height=3)
+for(label in features){
+
+  p <- VlnPlot(seurat_imm, features=label, pt.size=0, group.by='seurat_clusters') +
+    NoLegend() + ggtitle('') +
+    ylab(paste(label, 'score')) + xlab('clusters')
+  print(p)
+
+}
+dev.off()
+
+
+```
+
+
+
+cluster DEGs within immune subclusters
+
+```{r eval=FALSE}
+
+#################################################################################
+# marker DEGs for immune subclusters
+#################################################################################
+
+# compute marker DEGs for each cluster
+#Idents(seurat_obj) <- seurat_imm$clusternum_anno
+markers <- FindAllMarkers(
+  seurat_imm,
+  only.pos=TRUE,
+  min.pct=0.2,
+  logfc.threshold=0.5,
+  test.use='wilcox'
+)
+table(markers$cluster)
+markers$FDR <- p.adjust(markers$p_val, 'fdr')
+
+save(markers, file=paste0(data_dir, 'cluster_marker_DEGs.rda'))
+load(file=paste0(data_dir, 'cluster_marker_DEGs.rda'))
+
+write.csv(markers, file=paste0(data_dir, 'immune_subclusters_marker_DEGs.csv'), row.names=FALSE, quote=FALSE)
+
+
+
+################################################################################
+# Hierarchical Clustering of the top 25 DEGs per cluster:
+################################################################################
+library(circlize)
+library(ComplexHeatmap)
+library(dendsort)
+
+top_degs <- markers %>%
+  group_by(cluster) %>%
+  top_n(25, wt=avg_logFC)
+length(unique(top_degs$gene))
+
+expression_matrix <- AverageExpression(seurat_imm, features=unique(top_degs$gene), add.ident='DX')
+expression_matrix <- expression_matrix$RNA
+
+# convert to Z score
+zScore <- function(x){(x - mean(x)) /sd(x)}
+matrix_z <- apply(expression_matrix, 1, zScore) %>% t()
+matrix_z <- matrix_z[,order(colnames(matrix_z))]
+
+# col_fun = colorRamp2(c(range(matrix_z)[1], 0, range(matrix_z)[2]), c("blue", "white", "red"))
+
+cn = colnames(matrix_z)
+
+# set row annotation as selected genes:
+# set annotation list
+gene_anno_list <- top_degs %>% top_n(3, wt=avg_logFC) %>% .$gene %>% unique
+gene_anno_list <- c(gene_anno_list, c('Csf1r', 'P2ry12', 'Cx3cr1')) %>% unique
+gene_anno_list <- gene_anno_list[gene_anno_list %in% rownames(matrix_z)]
+
+ha = rowAnnotation(foo = anno_mark(at = unlist(lapply(gene_anno_list, function(gene){which(rownames(matrix_z) == gene)})), labels = gene_anno_list))
+
+
+column_ha <- HeatmapAnnotation(
+  immune_subclusters = do.call(rbind, str_split(colnames(matrix_z), '[_]'))[,1],
+  DX = do.call(rbind, str_split(colnames(matrix_z), '_'))[,2],
+  col = list(
+    immune_subclusters = colors.use,
+    DX = sample_color.scheme
+  )
+)
+
+
+# hierarchical clustering:
+row_dend = dendsort(hclust(dist(matrix_z)))
+col_dend = dendsort(hclust(dist(t(matrix_z))))
+
+# plot heatmap
+pdf(paste0(fig_dir, 'DEG_heatmap.pdf'), width=6, height=6)
+ComplexHeatmap::Heatmap(
+  matrix_z, show_column_names = FALSE, show_row_names=FALSE,
+  # col = col_fun,
+  # cluster_rows=row_dend,
+  cluster_rows=FALSE,
+  cluster_columns=FALSE,
+  right_annotation = ha,
+  top_annotation = column_ha,
+  use_raster = TRUE
+)
+dev.off()
+
+```
+
+
+
+ DotPlot of top 20 genes for each cluster:
+
+```{r eval=FALSE}
+dir.create(paste0(fig_dir, 'marker_DEGs'))
+
+# plot_genes <- c('Gabra6', 'Prox1', 'Mki67', 'Gfap', 'Vim', 'Nes', 'Dlx', 'Trp73', 'Reln')
+for(cur_cluster in unique(markers$cluster)){
+  print(cur_cluster)
+  plot_genes <- subset(markers, cluster == cur_cluster) %>%
+    top_n(20, wt=avg_logFC) %>% .$gene
+
+    p <- DotPlot(seurat_imm, group.by='seurat_clusters', features=plot_genes) +
+      coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+
+    pdf(paste0(fig_dir, 'marker_DEGs/', gsub('/', '-', cur_cluster), '_dotplot_markers.pdf'), width=6, height=6, useDingbats=FALSE)
+    print(p)
+    dev.off()
+}
+
+
+
+plot_genes <- c('Tfap2d', 'Slc17a6')
+
+p <- DotPlot(seurat_obj, group.by='clusternum_anno', features=plot_genes) +
+  coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+
+pdf(paste0(fig_dir, 'test_dotplot_markers.pdf'), width=12, height=4, useDingbats=FALSE)
+print(p)
+dev.off()
+
+```
+
+
+DEGs between each immune sub-cluster and all other cell types:
+
+```{r eval=FALSE}
+
+seurat_obj$immune_subclusters <- ifelse(colnames(seurat_obj) %in% colnames(seurat_imm), seurat_imm$seurat_clusters, seurat_obj$clusternum_anno)
+
+
+clusters <- unique(seurat_imm$seurat_clusters) %>% as.character
+other_clusters <- unique(seurat_obj$immune_subclusters)
+other_clusters <- other_clusters[!(other_clusters %in% clusters)]
+
+marker_df <- data.frame()
+for(cl in clusters){
+  print(cl)
+  seurat_degs <- subset(seurat_obj, immune_subclusters %in% c(cl, other_clusters))
+  Idents(seurat_degs) <- seurat_degs$immune_subclusters
+  de_markers <- FindMarkers(
+    seurat_degs,
+    ident.1 = cl,
+    only.pos=TRUE,
+    min.pct=0.2,
+    logfc.threshold=0.5,
+    test.use='wilcox'
+  )
+  de_markers$gene <- rownames(de_markers)
+  de_markers$cluster <- cl
+  de_markers$FDR <- p.adjust(de_markers$p_val, 'fdr')
+  marker_df <- rbind(marker_df, de_markers)
+
+}
+
+
+
+save(marker_df, file=paste0(data_dir, 'immune_subcluster_vs_other_DEGs.rda'))
+write.csv(marker_df, file=paste0(data_dir, 'immune_subcluster_vs_other_DEGs.csv'), row.names=FALSE, quote=FALSE)
+
+load(file=paste0(data_dir, 'immune_subcluster_vs_other_DEGs.rda'))
+
+
+marker_df %>% subset(cluster == 2) %>% top_n(10, wt=avg_logFC)
+
+# plot the top 5 DEGs in each cluster:
+top_genes <- marker_df %>% subset(FDR <= 0.05) %>% group_by(cluster) %>% top_n(5, wt=avg_logFC) %>% .$gene %>% unique
+
+
+p <- DotPlot(seurat_imm, features=top_genes) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+pdf(paste0(fig_dir, 'dotplot_top_degs.pdf'), width=6, height=6, useDingbats=FALSE)
+p
+dev.off()
+
+```
+
+Plot GO terms for these DEGs
+
+```{r eval=FALSE}
+
+# plot GO terms for these clusters:
+
+library(enrichR)
+
+dir.create(paste0(fig_dir, '/enrichR'))
+
+wrapText <- function(x, len) {
+    sapply(x, function(y) paste(strwrap(y, len), collapse = "\n"), USE.NAMES = FALSE)
+}
+
+dbs<-c('GO_Biological_Process_2018','GO_Cellular_Component_2018','GO_Molecular_Function_2018')
+
+
+combined_output <- data.frame()
+for(cur_cluster in unique(marker_df$cluster)){
+
+  df <-  subset(marker_df, cluster == cur_cluster)
+  geneNames <- top_n(df, 25, wt=avg_logFC) %>% .$gene
+  enriched <- enrichr(geneNames,dbs)
+
+  for(db in names(enriched)){
+    cur_df <- enriched[[db]]
+
+    if (nrow(cur_df) > 1){
+      cur_df$db <- db
+      cur_df$cluster <- cur_cluster
+      combined_output <- rbind(combined_output, cur_df)
+    }
+  }
+}
+
+
+for(cur_cluster in unique(marker_df$cluster)){
+
+  cur_terms <- subset(combined_output, cluster == cur_cluster)
+  cur_terms$wrap <- wrapText(cur_terms$Term, 45)
+
+  # plot top 20 as barplot
+  plot_list <- list()
+  for(cur_db in dbs){
+
+    plot_df <- subset(cur_terms, db==cur_db) %>% top_n(20, wt=Combined.Score)
+
+    plot_list[[cur_db]] <- ggplot(plot_df, aes(y=Combined.Score, x=reorder(wrap, Combined.Score))) +
+            geom_bar(stat='identity', color='black', fill='black') +
+            xlab('') +
+            coord_flip() +
+            ggtitle(cur_db)
+  }
+
+  pdf(paste0(fig_dir, 'enrichR/cluster_',cur_cluster ,'_terms.pdf'), width=7, height=10)
+  for(plot in plot_list){
+    print(plot)
+  }
+  dev.off()
+
+}
+
+```
+
+How many DEGs are shared?
+
+```{r eval=FALSE}
+
+library(ComplexHeatmap)
+library(GeneOverlap)
+
+cf <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+
+
+clusters <- marker_df$cluster %>% unique %>% as.character
+clusters <- clusters[order(clusters)]
+marker_list <- lapply(clusters, function(x){subset(marker_df, cluster==x & FDR <= 0.05) %>% top_n(50, wt=avg_logFC) %>% .$gene})
+names(marker_list) <- clusters
+
+gom.obj <- newGOM(marker_list, genome.size=nrow(seurat_obj))
+
+pdf(paste0(fig_dir, 'geneoverlap_heatmap.pdf'), width=8, height=8)
+GeneOverlap::drawHeatmap(gom.obj, what='Jaccard', grid.col='Greens', note.col='black')
+GeneOverlap::drawHeatmap(gom.obj, grid.col='Blues', note.col='Black')
+dev.off()
+
+
+
+```
