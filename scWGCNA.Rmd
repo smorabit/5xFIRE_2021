@@ -182,15 +182,15 @@ cur_seurat <- subset(seurat_obj, class %in% cur_celltypes)
 
 
 
-cur_seurat <- FindVariableFeatures(cur_seurat, nfeatures=3500)
-VariableFeatures(cur_seurat) <- VariableFeatures(cur_seurat)[!grepl("^mt-", VariableFeatures(cur_seurat))]
-
-# how many genes overlap?
-length(intersect(VariableFeatures(cur_seurat), VariableFeatures(seurat_obj)))
+# cur_seurat <- FindVariableFeatures(cur_seurat, nfeatures=3500)
+# VariableFeatures(cur_seurat) <- VariableFeatures(cur_seurat)[!grepl("^mt-", VariableFeatures(cur_seurat))]
+#
+# # how many genes overlap?
+# length(intersect(VariableFeatures(cur_seurat), VariableFeatures(seurat_obj)))
 
 # which genes to use?
-# genes.use <- VariableFeatures(seurat_obj)
-genes.use <- VariableFeatures(cur_seurat)
+genes.use <- VariableFeatures(seurat_obj)
+# genes.use <- VariableFeatures(cur_seurat)
 
 # genes that are in 25% of cells:
 # expr_mat <- GetAssayData(cur_seurat, slot='counts')
@@ -278,6 +278,9 @@ Construct dendrogram
 
 ```{r eval=FALSE}
 
+#EX, INH
+softPower=6
+
 # ASC, EX, INH cluster
 softPower=8
 
@@ -285,7 +288,7 @@ softPower=8
 softPower = 9
 
 # ODC,
-softPower = 10
+softPower =10
 
 nSets = 1
 setLabels = cur_celltype
@@ -693,6 +696,11 @@ for (mod in uniquemodcolors)  {
 }
 dev.off();
 
+# where are my favorite genes:
+geneInfo[grepl('Pdgf', rownames(geneInfo)),]
+geneInfo[grepl('Vegf', rownames(geneInfo)),]
+geneInfo[grepl('Tgfb', rownames(geneInfo)),]
+
 
 ```
 
@@ -700,7 +708,7 @@ Module score analysis in full snRNA dataset:
 
 ```{r eval=FALSE}
 
-dir.create('figures/featureplots')
+dir.create(paste0('figures/', cur_celltype, '/featureplots'))
 
 
 # load scWGCNA modules #########################################################
@@ -739,7 +747,7 @@ for(feature in plot_modules){
   # plot scWGCNA module scores
   order_values <- TRUE
   p <- FeaturePlot(seurat_obj, features=feature, order=order_values, reduction='paga_umap') +
-  scale_color_gradient2(low=scales::muted('blue'), mid='white', high=scales::muted('red'),
+  scale_color_gradient2(low=scales::muted('blue'), mid='gray95', high=scales::muted('red'),
          guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)
        ) + theme(plot.margin = unit(c(0, 0, 0, 0), "in"), legend.position='bottom') + umap_theme + ggtitle('') + NoLegend()
 

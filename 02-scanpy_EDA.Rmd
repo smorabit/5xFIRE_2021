@@ -1,7 +1,7 @@
 
 # load data from seurat:
 ```{python eval=FALSE}
-
+# conda activate scvi-env
 import scanpy as sc
 import anndata
 from scipy import io

@@ -469,7 +469,6 @@ dev.off()
 saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat_4_conditions.rds'))
 
 
-
 ```
 
 
@@ -614,6 +613,25 @@ for(i in 1:length(plots)){
 pdf(paste0(fig_dir, 'vlnplot_odc_celltype_markers.pdf'), width=6, height=3, useDingbats=FALSE)
 plots
 dev.off()
+
+
+
+```
+
+Plot with color scheme:
+
+```{r eval=FALSE}
+
+load('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/color_scheme_4-conditions.rda')
+
+p1 <- DimPlot(seurat_obj, reduction='paga_umap', group.by='clusternum_anno', label=TRUE) +
+  scale_color_manual(values=cluster_colors_all) + umap_theme
+
+
+pdf(paste0(fig_dir, 'umap_clusters_annotated_colors.pdf'), width=9, height=9)
+p1 + NoLegend()
+dev.off()
+
 
 
 

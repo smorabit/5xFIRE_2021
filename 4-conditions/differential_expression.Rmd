@@ -479,32 +479,8 @@ seurat_obj$clusternum_anno <- factor(
 )
 
 saveRDS(seurat_obj, paste0(data_dir, 'FIRE_mouse_seurat_4_conditions.rds'))
+saveRDS(seurat_obj, '/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
 
-
-#
-# library(RColorBrewer)
-# n <- length(levels(seurat_obj$clusternum_anno))
-# qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
-# col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
-# cols=sample(col_vector, n)
-#
-# col_vector <- c(
-#   brewer.pal(8, 'Set2'),
-#   brewer.pal(9, 'Greens')[2:8],
-#   brewer.pal(9, 'Purples')[2:8],
-#   brewer.pal(12, 'Paired'),
-#   brewer.pal(6, 'Accent')
-# )
-#
-# cols=sample(col_vector, n)
-#
-#
-# library(TSP)
-# rgb <- col2rgb(cols)
-# tsp <- as.TSP(dist(t(rgb)))
-# sol <- solve_TSP(tsp, control = list(repetitions = 1e3))
-# ordered_cols <- cols[sol]
-#
 
 # plot umap to check
 p1 <- DimPlot(seurat_obj, group.by='clusternum_anno', label=TRUE, repel=TRUE, reduction='paga_umap') + umap_theme +
