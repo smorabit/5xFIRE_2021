@@ -1,0 +1,475 @@
+
+```{r eval=FALSE}
+
+
+# in bash terminal:
+# conda activate cicero
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(RColorBrewer)
+library(ggrepel)
+library(patchwork)
+colfunc <- colorRampPalette(rev(brewer.pal(11, 'Spectral' )))
+prediction.colfunc <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+
+theme_set(theme_cowplot())
+
+# setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/hardcore_filtering/")
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/human_pericytes/")
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load data :
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
+
+# load human data:
+seurat_human <- readRDS('data/HuVascADPeris_withctx.rds')
+
+# re-load processed:
+seurat_per <- readRDS(file='data/seurat_pericytes.rds')
+seurat_human <- readRDS(file='data/seurat_pericytes_human.rds')
+
+# color scheme:
+load('../4-conditions/data/color_scheme_4-conditions_celltype.rda')
+
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+# color scheme from Sep:
+sample_color.scheme <- c(
+  rgb(139,171,211, maxColorValue=255),
+  rgb(9,153,99, maxColorValue=255),
+  rgb(176,127,192, maxColorValue=255),
+  rgb(7,126,151, maxColorValue=255),
+  rgb(87,87,249, maxColorValue=255),
+  rgb(184,86,215, maxColorValue=255)
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+```
+
+Map mouse pericytes to human pericytes:
+
+```{r eval=FALSE}
+
+# rename mouse genes to capitalize them!!
+
+# make a new object with just the pericytes:
+counts <- GetAssayData(seurat_obj, slot='counts')[,seurat_obj$cellchat_clusters == 'PER']
+data <- GetAssayData(seurat_obj, slot='data')[,seurat_obj$cellchat_clusters == 'PER']
+rownames(counts) <- toupper(rownames(counts))
+rownames(data) <- toupper(rownames(data))
+
+seurat_per <- CreateSeuratObject(
+  counts = counts,
+  data = data,
+  meta = seurat_obj@meta.data %>% subset(cellchat_clusters == 'PER')
+)
+
+seurat_full_per <- subset(seurat_obj, cellchat_clusters == 'PER')
+seurat_per@reductions <- seurat_full_per@reductions
+seurat_per <- NormalizeData(seurat_per)
+
+# run UMAP in the human data:
+
+seurat_human <- RunUMAP(seurat_human , dims = 1:30, reduction = "pca", return.model = TRUE)
+
+anchors <- FindTransferAnchors(
+    reference = seurat_human,
+    query = seurat_per,
+    dims = 1:30,
+    reference.reduction = "pca"
+)
+
+predictions<- TransferData(
+  anchorset = anchors,
+  refdata = seurat_human$seurat_clusters,
+  weight.reduction = seurat_per[["harmony"]],
+  dims=1:30,
+  k.weight=5 # had to change this value or else it doesn't work
+)
+
+seurat_per <- AddMetaData(seurat_per, metadata = predictions)
+
+
+seurat_per <- MapQuery(
+  anchorset = anchors,
+  reference = seurat_human,
+  query = seurat_per,
+  refdata = list(cluster = "seurat_clusters"),
+  reference.reduction = "pca",
+  reduction.model = "umap",
+  transferdata.args=list(k.weight=5)
+)
+
+
+
+#DefaultAssay(seurat_per) <- 'predictions'
+p1 <- DimPlot(seurat_per, group.by='predicted.cluster', label=FALSE, reduction='ref.umap') + umap_theme
+p2 <- DimPlot(seurat_human, group.by='seurat_clusters', label=TRUE) + umap_theme
+
+
+pdf(paste0(fig_dir, 'umap_human_clusters_mapped.pdf'), width=10, height=5)
+p1 | p2
+dev.off()
+
+
+# annotation:
+df_annot <- data.frame(
+  annotation = c('T-PER', 'M-PER', 'aSMC'),
+  cluster = c(0, 1, 2),
+  stringsAsFactors=FALSE
+)
+seurat_per$pericyte_anno <- df_annot$annotation[match(seurat_per$predicted.cluster, df_annot$cluster)]
+
+
+# annotation:
+df_annot <- data.frame(
+  annotation = c('T-PER', 'M-PER', 'aSMC', 'aaSMC'),
+  cluster = c(0, 1, 2,3),
+  stringsAsFactors=FALSE
+)
+seurat_human$pericyte_anno <- df_annot$annotation[match(seurat_human$seurat_clusters, df_annot$cluster)]
+
+# color_scheme
+per_colors <- c(rgb(192,113,255, maxColorValue=255), rgb(3,183,188, maxColorValue=255), rgb(247,107,98, maxColorValue=255), rgb(113,164,0, maxColorValue=255))
+names(per_colors) <- df_annot$annotation
+
+#DefaultAssay(seurat_per) <- 'predictions'
+p1 <- DimPlot(seurat_per, group.by='pericyte_anno', reduction='ref.umap', label=TRUE, cols=per_colors) + umap_theme + NoLegend()
+p2 <- DimPlot(seurat_human, group.by='pericyte_anno', label=TRUE, cols=per_colors) + umap_theme + NoLegend()
+pdf(paste0(fig_dir, 'umap_pericytes_predicted_labels.pdf'), width=10, height=5)
+p1 | p2
+dev.off()
+
+
+# annnotate human:
+df_annot <- data.frame(
+  annotation = c('T-PER', 'M-PER', 'aSMC', 'aaSMC'),
+  cluster = c(0,1,2,3),
+  stringsAsFactors=FALSE
+)
+seurat_human$pericyte_anno <- df_annot$annotation[match(seurat_human$seurat_clusters, df_annot$cluster)]
+
+
+
+saveRDS(seurat_per, file='data/seurat_pericytes.rds')
+saveRDS(seurat_human, file='data/seurat_pericytes_human.rds')
+
+```
+
+Plot PNG versions for paper:
+
+```{r eval=FALSE}
+
+# human pericytes colored by cluster:
+p <- DimPlot(seurat_human, group.by='pericyte_anno', cols=per_colors) + umap_theme + NoLegend() + ggtitle('')
+png(paste0(fig_dir, 'umap_human_per_clusters.png'), width=5, height=5, units='in', res=400)
+p
+dev.off()
+
+# mouse mapped pericytes colored by cluster:
+p <- DimPlot(seurat_per, group.by='pericyte_anno', cols=per_colors, reduction='ref.umap') + umap_theme + NoLegend() + ggtitle('')
+png(paste0(fig_dir, 'umap_mouse_per_clusters.png'), width=5, height=5, units='in', res=400)
+p
+dev.off()
+
+# human pericytes colored by Diagnosis:
+p <- DimPlot(seurat_human, group.by='treat') + umap_theme + NoLegend() + ggtitle('')
+png(paste0(fig_dir, 'umap_human_per_diagnosis.png'), width=5, height=5, units='in', res=400)
+p
+dev.off()
+
+# mouse mapped pericytes colored by diagnosis:
+p <- DimPlot(seurat_per, group.by='DX', reduction='ref.umap', cols=sample_color.scheme) + umap_theme + NoLegend() + ggtitle('')
+png(paste0(fig_dir, 'umap_mouse_per_diagnosis.png'), width=5, height=5, units='in', res=400)
+p
+dev.off()
+
+# mouse original UMAP colored by predicted cluster
+p <- DimPlot(seurat_obj, group.by='clusternum_anno', cells.highlight=colnames(seurat_obj)[seurat_obj$clusternum_anno == '21-PER'], reduction='paga_umap') + umap_theme + NoLegend() + ggtitle('')
+png(paste0(fig_dir, 'umap_mouse_per_clusters_paga.png'), width=5, height=5, units='in', res=400)
+p
+dev.off()
+
+
+
+
+```
+
+Plot stuff in mouse
+
+```{r eval=FALSE}
+
+#DefaultAssay(seurat_per) <- 'predictions'
+p1 <- FeaturePlot(seurat_per, feature='nCount_RNA', reduction='ref.umap', order=TRUE) + umap_theme
+pdf(paste0(fig_dir, 'umap_pericytes_nCount_RNA.pdf'), width=5, height=5)
+p1
+dev.off()
+
+
+
+```
+
+Plot the proportion of different clusters:
+
+```{r eval=FALSE}
+
+###########################################################################
+
+cell_meta <- seurat_per@meta.data
+variable <- 'DX'
+cluster_var <- 'pericyte_anno'
+clusters <- unique(cell_meta[[cluster_var]])
+df <- data.frame()
+for(i in 1:length(clusters)){
+
+  cur_df <- table(cell_meta[cell_meta[[cluster_var]]==clusters[i],variable])
+  cur_df <- as.data.frame(cur_df / table(cell_meta[[variable]])[names(cur_df)])
+  cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+
+  cur_df$cluster <- clusters[i]
+  df <- rbind(df, cur_df)
+}
+
+df$Var1 <- factor(
+  as.character(df$Var1),
+  levels = levels(seurat_obj$DX)
+  #levels=c('M-PER', 'T-PER', 'aSMC')
+)
+
+pdf(paste0(fig_dir, "pericyte_clusters_barplot.pdf"), height=6, width=3)
+p <- ggplot(df, aes(y=Freq, x=cluster, fill=Var1)) +
+  geom_bar(stat='identity') +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values=sample_color.scheme) +
+  theme(
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank(),
+    axis.text.x = element_text(angle=45, hjust=1),
+    axis.title.x = element_blank(),
+    legend.title = element_blank(),
+    axis.line.y = element_blank(),
+    axis.line.x = element_blank(),
+    legend.position='bottom'
+  )
+print(p)
+dev.off()
+
+
+
+###########################################################################
+
+cell_meta <- seurat_human@meta.data
+variable <- 'treat'
+cluster_var <- 'pericyte_anno'
+clusters <- unique(cell_meta[[cluster_var]])
+df <- data.frame()
+for(i in 1:length(clusters)){
+
+  cur_df <- table(cell_meta[cell_meta[[cluster_var]]==clusters[i],variable])
+  cur_df <- as.data.frame(cur_df / table(cell_meta[[variable]])[names(cur_df)])
+  cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+
+  cur_df$cluster <- clusters[i]
+  df <- rbind(df, cur_df)
+}
+
+
+pdf(paste0(fig_dir, "pericyte_clusters_barplot_human.pdf"), height=6, width=3)
+p <- ggplot(df, aes(y=Freq, x=cluster, fill=Var1)) +
+  geom_bar(stat='identity') +
+  scale_y_continuous(expand = c(0,0)) +
+#  scale_fill_manual(values=sex_colors) +
+  theme(
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank(),
+    axis.text.x = element_text(angle=45, hjust=1),
+    axis.title.x = element_blank(),
+    legend.title = element_blank(),
+    axis.line.y = element_blank(),
+    axis.line.x = element_blank(),
+    legend.position='bottom'
+  )
+print(p)
+dev.off()
+
+```
+
+Module score for END module in human AD:
+
+```{r eval=FALSE}
+
+library(UCell)
+
+wgcna_dir <- '~/swaruplab/smorabit/analysis/FIRE_mouse_2021/scWGCNA/data/'
+cur_celltype <- 'END'
+
+geneInfo <- read.csv(paste0(wgcna_dir, cur_celltype, '_geneInfoSigned.csv'), stringsAsFactors=FALSE)
+
+# convert genes to capital letters for human data:
+geneInfo$GeneSymbol <- toupper(geneInfo$GeneSymbol)
+
+# remove grey module:
+geneInfo <- subset(geneInfo, Initially.Assigned.Module.Color != 'grey')
+
+# get top 25 genes by kME for each module:
+n_genes <- 100
+module_labels <- unique(geneInfo$ModuleLabel)
+modules <- unique(geneInfo$Initially.Assigned.Module.Color)
+module_labels <- module_labels[order(modules)]
+modules <- modules[order(modules)]
+module_list <- lapply(modules, function(mod){
+  cur <- subset(geneInfo, Initially.Assigned.Module.Color == mod)
+  cur[,c('GeneSymbol', paste0('kME', mod))] %>%
+    top_n(n_genes) %>% .$GeneSymbol
+})
+names(module_list) <- module_labels
+
+# compute module scores:
+seurat_human <- AddModuleScore_UCell(
+ seurat_human,
+ features=module_list,
+ name=paste0(cur_celltype, '_M')
+)
+
+# feature plot of the blue module:
+
+
+# plot scWGCNA module scores
+order_values <- TRUE
+p <- FeaturePlot(seurat_human, features='END.M1END_M', order=order_values, reduction='umap') +
+scale_color_gradient2(low=scales::muted('blue'), mid='gray95', high=scales::muted('red'),
+       guide = guide_colorbar(barwidth=15, barheight=0.5, ticks=FALSE)
+     ) + theme(plot.margin = unit(c(0, 0, 0, 0), "in"), legend.position='bottom') + umap_theme + ggtitle('')
+
+pdf(paste0(fig_dir,'umap_human_blue_WGCNA_featureplot.pdf'), width=5, height=5, )
+print(p)
+dev.off()
+
+p1 <- VlnPlot(seurat_human, features='END.M1END_M', group.by='pericyte_anno', split.by='treat', pt.size=0, split.plot=TRUE) + ggtitle('END-M1') +
+stat_compare_means(method='wilcox', label='p.signif')
+
+p2 <- VlnPlot(seurat_human, features='END.M2END_M', group.by='pericyte_anno', split.by='treat', pt.size=0, split.plot=TRUE) + ggtitle('END-M2') +
+stat_compare_means(method='wilcox', label='p.signif')
+
+
+pdf(paste0(fig_dir,'vln_human_blue_WGCNA.pdf'), width=5, height=4 )
+p1
+p2
+dev.off()
+
+
+```
+
+
+Module score for Blue module in mouse pericytes:
+
+```{r eval=FALSE}
+
+# compute module scores:
+seurat_per <- AddModuleScore_UCell(
+ seurat_per,
+ features=module_list,
+ name=paste0(cur_celltype, '_M')
+)
+
+# feature plot of the blue module:
+
+p <- VlnPlot(seurat_per, features='END.M1END_M', group.by='pericyte_anno', split.by='DX') + ggtitle('Blue Module')
+#stat_compare_means(method='wilcox', label='p.signif')
+
+pdf(paste0(fig_dir,'vln_mouse_blue_WGCNA.pdf'), width=8, height=4 )
+print(p)
+dev.off()
+
+
+```
+
+
+Plot some stuff in the human data:
+
+```{r eval=FALSE}
+
+
+p1 <- DimPlot(seurat_human, group.by='seurat_clusters', label=TRUE) + umap_theme + NoLegend()
+
+pdf(paste0(fig_dir, 'umap_human_clusters.pdf'), width=7, height=7)
+p1
+dev.off()
+
+```
+
+Calcification genes:
+
+```{r eval=FALSE}
+
+# mt_genes <- rownames(seurat_obj)[grepl('^mt-', rownames(seurat_obj))]
+
+# PFBC Genes:
+# doi: 10.1097/WCO.0000000000000712
+
+# a lot of other calcification genes:
+# https://www.ncbi.nlm.nih.gov/books/NBK1421/
+
+calc_genes <- list(
+  'PFBC' = c('Slc20a2', 'Pdgfrb', 'Pdgfb', 'Xpr1', 'Myorg') %>% toupper(),
+  'AGS' = c('Adar', 'Rnaseh2a', 'If1h1', 'Rnaseh2b', 'Rnaseh2c', 'Samhd1', 'Trex1') %>% toupper(),
+  'TCC' = c('Tsc1', 'Tsc2') %>% toupper(),
+  'Other' = c('Flt', 'Atn1', 'Tyrobp', 'Trem2', 'Slc30a10', 'Fxn', 'Ercc6', 'Ercc8') %>% toupper()
+)
+
+p1 <- DotPlot(seurat_per, group.by='pericyte_anno', features=calc_genes, scale=FALSE) + RotatedAxis() + xlab('') + ylab('') + ggtitle('mouse') + theme(plot.title = element_text(hjust=0.5))
+p2 <- DotPlot(seurat_human, group.by='pericyte_anno', features=calc_genes, scale=FALSE) + RotatedAxis() + xlab('') + ylab('') + ggtitle('human')+ theme(plot.title = element_text(hjust=0.5))
+
+pdf(paste0(fig_dir, 'calcification_genes.pdf'), width=10, height=8)
+p1 /
+p2
+dev.off()
+
+
+pfbc_genes <- c('Slc20a2', 'Pdgfrb', 'Pdgfb', 'Xpr1', 'Myorg')
+
+```

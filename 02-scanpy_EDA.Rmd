@@ -78,4 +78,4 @@ adata.obs['paga_UMAP2'] = adata.obsm['X_umap'][:,1]
 adata.obs.to_csv('{}scanpy_meta.csv'.format(data_dir))
 
 
-``
+```

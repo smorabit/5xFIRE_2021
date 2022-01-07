@@ -1,0 +1,149 @@
+
+Load stuff on local machine:
+
+```{r eval=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(viridis)
+library(ggpubr)
+library(RColorBrewer)
+library(ggrepel)
+library(patchwork)
+library(ggrastr)
+
+theme_set(theme_cowplot())
+
+setwd("/Volumes/GoogleDrive/Shared drives/Bioinfo_SwarupLab/Sam_Dropbox/pipelines/FIRE-mouse-2021/analysis/DEGs/")
+
+data_dir <- 'data/'
+fig_dir <- 'figures/'
+
+
+# color scheme from Sep:
+sample_color.scheme <- c(
+  rgb(139,171,211, maxColorValue=255),
+  rgb(9,153,99, maxColorValue=255),
+  rgb(176,127,192, maxColorValue=255),
+  rgb(7,126,151, maxColorValue=255),
+  rgb(87,87,249, maxColorValue=255),
+  rgb(184,86,215, maxColorValue=255)
+)
+names(sample_color.scheme) <- c("WT","5xFAD","FIRE","5xFIRE","5xFIRE + PBS","5xFIRE + transplant")
+
+# small clusters that we won't include in combined volcano plots:
+small_clusters <- c('OB', 'OEC', 'EPD')
+
+```
+
+5xFIRE vs FIRE DEGs:
+
+```{r eval=FALSE}
+
+# 5xFIRE vs FIRE
+name = '5xFIRE_vs_FIRE'
+color.up  <- sample_color.scheme[['5xFIRE']]
+color.down  <- sample_color.scheme[['FIRE']]
+
+# 5xFAD vs WT:
+name = '5xFAD_vs_WT'
+color.up  <- sample_color.scheme[['5xFAD']]
+color.down  <- sample_color.scheme[['WT']]
+
+# 5xFIRE vs WT:
+name = '5xFIRE_vs_WT'
+color.up  <- sample_color.scheme[['5xFIRE']]
+color.down  <- sample_color.scheme[['WT']]
+
+# 5xFIRE vs 5xFAD:
+name = '5xFIRE_vs_5xFAD'
+color.up  <- sample_color.scheme[['5xFIRE']]
+color.down  <- sample_color.scheme[['5xFAD']]
+
+# 5xFIRE + Transplant vs 5xFIRE + PBS:
+name = '5xFIRE-transplant_vs_5xFIRE-PBS'
+color.up  <- sample_color.scheme[['5xFIRE + transplant']]
+color.down  <- sample_color.scheme[['5xFIRE + PBS']]
+
+# 5xFIRE + Transplant vs 5xFIRE:
+name = '5xFIRE-transplant_vs_5xFIRE'
+color.up  <- sample_color.scheme[['5xFIRE + transplant']]
+color.down  <- sample_color.scheme[['5xFIRE']]
+
+# 5xFIRE + Transplant vs 5xFAD:
+name = '5xFIRE-transplant_vs_5xFAD'
+color.up  <- sample_color.scheme[['5xFIRE + transplant']]
+color.down  <- sample_color.scheme[['5xFAD']]
+
+# FIRE vs WT:
+name = 'FIRE_vs_WT'
+color.up  <- sample_color.scheme[['FIRE']]
+color.down  <- sample_color.scheme[['WT']]
+
+# make figure directory
+dir.create(paste0(fig_dir, name))
+
+# load markers
+cur_degs <- read.csv(file=paste0(data_dir, name, '_major_celltypes.csv'), stringsAsFactors=FALSE)
+cur_degs <- cur_degs %>% rename(group = cluster)
+
+# subset small clusters and MT genes:
+cur_degs <- subset(cur_degs, !(group %in% small_clusters))
+cur_degs <- cur_degs[!grepl('^mt-', cur_degs$gene),]
+
+cur_degs$group <- factor(as.character(cur_degs$group), levels=unique(cur_degs$group)[order(as.character(unique(cur_degs$group)))])
+
+# label the top 5 and bottom 5 significant genes by log fold change
+cur_degs <- Reduce(rbind, lapply(unique(cur_degs$group), function(x){
+  cur <- subset(cur_degs, group == x)
+
+  top_thresh <- cur %>% subset(FDR <= 0.1 & avg_logFC >= 0) %>% top_n(-5, wt=FDR) %>% .$FDR %>% max
+  bottom_thresh <- cur %>% subset(FDR <= 0.1 & avg_logFC < 0) %>% top_n(-5, wt=FDR) %>% .$FDR %>% max
+  cur$anno <- ifelse(cur$FDR <= top_thresh & cur$avg_logFC >= 0 , cur$gene, NA)
+  cur$anno <- ifelse(cur$FDR <= bottom_thresh & cur$avg_logFC < 0, cur$gene, cur$anno)
+
+  cur$color <- ifelse(cur$FDR > 0.1, 'gray', ifelse(cur$avg_logFC > 0, color.up, color.down))
+  cur
+}))
+
+# build volcano plot
+# 1: plot significance line
+# 2: plot all points
+# 3: plot points with labels (black outline)
+# 4: plot the text labels
+# 5+: formatting
+
+# loop through each cluster:
+plot_list <- list()
+for(cur_celltype in levels(cur_degs$group)){
+  print(cur_celltype)
+  plot_df <- cur_degs %>% subset(group == cur_celltype)
+  p <- ggplot(plot_df, aes(x=avg_logFC, y=-log10(FDR))) +
+     #geom_hline(yintercept=-log10(0.05), linetype='dashed') +
+     rasterise(geom_point(alpha=0.5, color=plot_df$color), dpi=400) +
+     geom_point(inherit.aes=FALSE, data=subset(plot_df, !is.na(anno)), aes(avg_logFC, -log10(FDR)),fill=subset(plot_df, !is.na(anno)) %>% .$color, shape=21, size=2, color='black') +
+     geom_text_repel(aes(label=anno), color='black', fontface='italic',  min.segment.length=0) +
+     xlim(-1*max(abs(plot_df$avg_logFC))-0.1, max(abs(plot_df$avg_logFC))+0.1) +
+     ggtitle(cur_celltype) +
+     theme(
+       panel.grid.major = element_blank(),
+       plot.title = element_text(hjust = 0.5)
+     ) + NoLegend()
+
+  pdf(paste0(fig_dir, name, '/volcano_', gsub(' ', '_', cur_celltype), '_DEGs.pdf'), width=4, height=4, useDingbats=FALSE)
+  print(p)
+  dev.off()
+
+  # remove the axis labels:
+  p <- p + theme(axis.title.x=element_blank(),axis.title.y=element_blank())
+  plot_list[[cur_celltype]] <- p
+}
+
+# plot combined:
+pdf(paste0(fig_dir, '/volcano_', name, '_DEGs.pdf'), width=14, height=7, useDingbats=FALSE)
+wrap_plots(plot_list, ncol=5)
+dev.off()
+
+
+```

@@ -41,6 +41,97 @@ umap_theme <- theme(
 
 ```
 
+Load data on HPC:
+```{r eval=FALSE}
+
+
+# in bash terminal:
+# conda activate spatial
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+library(ggpubr)
+library(DoubletFinder)
+library(RColorBrewer)
+library(ggrepel)
+library(patchwork)
+colfunc <- colorRampPalette(rev(brewer.pal(11, 'Spectral' )))
+prediction.colfunc <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+
+theme_set(theme_cowplot())
+
+# setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/hardcore_filtering/")
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/hardcore_filtering/")
+
+# directories
+splitpipe_outdir <- "~/swaruplab/smorabit/data/FIRE_mouse_2021/analysis/"
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load:
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
+# seurat_obj <- seurat_obj[,!(seurat_obj$clusternum_anno %in% c('42-UNK', '44-VLMC / ODC'))]
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+```
+
+what % of cells are Csf1r + in the IMM group?
+
+```{r eval=FALSE}
+
+seurat_imm <- subset(seurat_obj, class=='IMM')
+
+mg_genes <- c('Csf1r')
+exp_data <- GetAssayData(seurat_imm, slot='data')[mg_genes,]
+
+
+test <- colSums(exp_data)
+test <- exp_data
+
+sum(test>=1)
+sum(test>=1)/ncol(seurat_imm)
+
+```
+
 Plots without transplant condition:
 
 cluster plots
@@ -461,6 +552,123 @@ dev.off()
 
 ```
 
+
+Heatmap of marker genes (4 conditions)
+
+```{r eval=FALSE}
+
+
+# load seurat object
+seurat_obj <- readRDS('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/FIRE_mouse_seurat_4_conditions.rds')
+
+load('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/cluster_marker_DEGs.rda')
+degs <- markers
+degs$group <- factor(
+  degs$cluster,
+  levels = levels(seurat_obj$clusternum_anno)
+)
+
+n_degs <- 3
+plot_genes <- degs %>%
+  arrange(group) %>%
+  subset(p_val_adj <= 0.05) %>%
+  group_by(group) %>%
+  top_n(n_degs, wt=avg_logFC)  %>%
+  .$gene
+
+
+# set random seed
+set.seed(1111)
+
+seurat_obj$barcode <- colnames(seurat_obj)
+temp <- table(seurat_obj@meta.data$clusternum_anno)
+
+df <- data.frame()
+for(i in 1:length(temp)){
+
+  if(temp[[i]] < 200){
+    cur_df <- seurat_obj@meta.data %>% subset(clusternum_anno == names(temp)[i])
+  } else{
+    cur_df <- seurat_obj@meta.data %>% subset(clusternum_anno == names(temp)[i]) %>% sample_n(200)
+  }
+  print(head(cur_df))
+  df <- rbind(df, cur_df)
+}
+
+
+
+seurat_obj$ordered_clusters <- fct_rev(seurat_obj$clusternum_anno)
+p <- DoHeatmap(
+  seurat_obj %>% subset(barcode %in% df$barcode),
+  features=unlist(plot_genes),
+  group.by='clusternum_anno',
+  raster=TRUE, slot='scale.data',
+#  group.colors=cluster_colors
+)
+
+
+pdf(paste0(fig_dir, 'marker_gene_heatmap_4-conditions.pdf'), width=25, height=20, useDingbats=FALSE)
+p
+dev.off()
+
+```
+
+Heatmap of marker genes
+
+```{r eval=FALSE}
+
+load('data/cluster_marker_DEGs.rda')
+degs <- markers
+degs$group <- factor(
+  degs$cluster,
+  levels = levels(seurat_obj$clusternum_anno)
+)
+
+n_degs <- 3
+plot_genes <- degs %>%
+  arrange(group) %>%
+  subset(p_val_adj <= 0.05) %>%
+  group_by(group) %>%
+  top_n(n_degs, wt=avg_logFC)  %>%
+  .$gene
+
+
+# set random seed
+set.seed(1111)
+
+seurat_obj$barcode <- colnames(seurat_obj)
+temp <- table(seurat_obj@meta.data$clusternum_anno)
+
+df <- data.frame()
+for(i in 1:length(temp)){
+
+  if(temp[[i]] < 200){
+    cur_df <- seurat_obj@meta.data %>% subset(clusternum_anno == names(temp)[i])
+  } else{
+    cur_df <- seurat_obj@meta.data %>% subset(clusternum_anno == names(temp)[i]) %>% sample_n(200)
+  }
+  print(head(cur_df))
+  df <- rbind(df, cur_df)
+}
+
+
+
+seurat_obj$ordered_clusters <- fct_rev(seurat_obj$clusternum_anno)
+p <- DoHeatmap(
+  seurat_obj %>% subset(barcode %in% df$barcode),
+  features=unlist(plot_genes),
+  group.by='clusternum_anno',
+  raster=TRUE, slot='scale.data',
+#  group.colors=cluster_colors
+)
+
+
+pdf(paste0(fig_dir, 'marker_gene_heatmap.pdf'), width=25, height=20, useDingbats=FALSE)
+p
+dev.off()
+
+```
+
 Dotplot of cluster DEGs:
 
 ```{r eval=FALSE}
@@ -586,23 +794,57 @@ Csf1r depletion in FIRE conditions:
 
 ```{r eval=FALSE}
 
-comparisons <- list(c(2,4), c(1,3))
+
+# color scheme from Sep:
+sample_color.scheme <- c(
+  rgb(139,171,211, maxColorValue=255),
+  rgb(9,153,99, maxColorValue=255),
+  rgb(176,127,192, maxColorValue=255),
+  rgb(7,126,151, maxColorValue=255),
+  rgb(87,87,249, maxColorValue=255),
+  rgb(184,86,215, maxColorValue=255)
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+comparisons <- list(c(1,2),  c(1,3), c(2,4))
 
 # csf1r
+genes <- c('Csf1r', 'Cx3cr1', 'P2ry12', 'Trem2', 'Tmem119',  'Cd9')
+
+for(gene in genes){
+  print(gene)
+  p1 <- VlnPlot(subset(seurat_obj, class=='IMM'), features=gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  # stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(-0.1,4.75))
+
+  pdf(paste0(fig_dir, 'vlnplot_', gene, '_DX.pdf'), width=4, height=4)
+  print(p1)
+  dev.off()
+
+}
+
+
+# plot Csf1r in all clusters:
+
 gene <- 'Csf1r'
-gene <- 'Cx3cr1'
-gene <- 'P2ry12'
-gene <- 'Trem2'
-gene <- 'Tmem119'
-gene <- 'Cd9'
 
-p1 <- VlnPlot(subset(seurat_obj, class=='IMM'), features=gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
-stat_summary(fun.data='mean_cl_boot', color='black') +
-stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
-xlab('') + NoLegend() + ylim(c(-0.1,4.75))
+seurat_obj$clusternum_anno <- as.character(seurat_obj$clusternum_anno)
 
-pdf(paste0(fig_dir, 'vlnplot_', gene, '_DX.pdf'), width=4, height=4)
-p1
+plot_list <- list()
+for(group in unique(seurat_obj$clusternum_anno)){
+
+  print(group)
+  p <- VlnPlot(seurat_obj[, seurat_obj$clusternum_anno == group], features=gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  #stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(-0.1,4.75)) + ylab('') + ggtitle(group)
+
+  plot_list[[group]] <- p
+}
+
+pdf(paste0(fig_dir, 'Csf1r_expression_all_clusters.pdf'), width=20, height=25)
+wrap_plots(plot_list, ncol=6)
 dev.off()
 
 
@@ -610,10 +852,12 @@ dev.off()
 ```
 
 
-DAM scores
+DAM scores 4 conditions
 
 ```{r eval=FALSE}
 
+# load seurat object
+seurat_obj <- readRDS('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/4-conditions/data/FIRE_mouse_seurat_4_conditions.rds')
 
 homeostatic <- str_to_title(c('HEXB', 'CST3', 'CX3CR1', 'CTSD', 'CSF1R', 'CTSS', 'SPARC', 'TMSB4X', 'P2RY12', 'C1QA', 'C1QB'))
 stage1_DAM <- str_to_title(c('TYROBP', 'CTSB', 'APOE', 'B2M', 'FTH1'))
@@ -628,38 +872,92 @@ seurat_imm <- AddModuleScore(
 )
 
 
-comparisons <- list(c(2,4), c(1,3), c(1,2),)
+comparisons  <- list(c(2,4), c(1,3), c(3,4), c(1,2), c(1,4))
 
 p1 <- VlnPlot(seurat_imm, features='homeostatic3', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
 geom_hline(yintercept = 0, linetype='dashed') +
 stat_summary(fun.data='mean_cl_boot', color='black') +
 stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
 xlab('') + NoLegend() +
-ylim(c(-0.5,2.5))+ ggtitle('Homeostatic')
+ylim(c(-0.5,2.75))+ ggtitle('Homeostatic')
 
 p2 <- VlnPlot(seurat_imm, features='stage1_DAM1', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
 geom_hline(yintercept = 0, linetype='dashed') +
 stat_summary(fun.data='mean_cl_boot', color='black') +
 stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
 xlab('') + NoLegend() +
-ylim(c(-0.5,2.5))+ ggtitle('Stage 1 DAM')
+ylim(c(-0.5,2.75))+ ggtitle('Stage 1 DAM')
 
 p3 <- VlnPlot(seurat_imm, features='stage2_DAM2', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
 geom_hline(yintercept = 0, linetype='dashed') +
 stat_summary(fun.data='mean_cl_boot', color='black') +
 stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
 xlab('') + NoLegend() +
-ylim(c(-0.5,2.5)) + ggtitle('Stage 2 DAM')
+ylim(c(-0.5,2.75)) + ggtitle('Stage 2 DAM')
 
-
-range(seurat_obj$stage2_DAM2)
-range(seurat_obj$stage1_DAM1)
-range(seurat_obj$homeostatic3)
-
-pdf(paste0(fig_dir, 'vlnplot_DAM_DX.pdf'), width=8, height=4)
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_new.pdf'), width=8, height=4, useDingbats=FALSE)
 p1 | p2 | p3
 dev.off()
 
+
+################################################################################
+# make violin plots for individual DAM genes
+################################################################################
+
+# homeostatic
+plot_list <- list()
+for(cur_gene in homeostatic){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_homeostatic.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
+
+# stage1_DAM
+plot_list <- list()
+for(cur_gene in stage1_DAM){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_stage1.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
+
+
+# stage2_DAM
+plot_list <- list()
+for(cur_gene in stage2_DAM){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_stage2.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
 
 
 ```
@@ -787,7 +1085,7 @@ p <- ggplot(df, aes(x=reorder(Var1, Freq), y=Freq, fill=Var1, )) +
     axis.ticks.y=element_blank(),
   )
 
-pdf(paste0(fig_dir, 'barplot_nCells_samples.pdf'), width=6, height=6)
+pdf(paste0(fig_dir, 'barplot_nCells_samples.pdf'), width=6, height=9)
 p + facet_wrap(~group, scales='free_y', ncol=2)
 dev.off()
 
@@ -1028,6 +1326,60 @@ result_table$signif <- as.character(gtools::stars.pval(result_table$FDR))
 write.csv(result_table, file=paste0('data/', name, '_comparison_results.csv'), quote=FALSE)
 
 result_table
+
+
+```
+
+Plot stuff for data with the transplants:
+
+```{r eval=FALSE}
+
+# plot UMAP of subcluster num anno:
+
+p <- DimPlot(seurat_obj, group.by='clusternum_anno', label=FALSE, reduction='paga_umap')
+png(paste0(fig_dir, 'umap_transplants_clusters.png'), width=6, height=6, res=600, units='in')
+p + umap_theme + NoLegend() + ggtitle('')
+dev.off()
+
+p <- DimPlot(seurat_obj %>% subset(DX == '5xFIRE'), group.by='clusternum_anno', label=FALSE, reduction='paga_umap')
+pdf(paste0(fig_dir, 'umap_transplants_clusters2.pdf'), width=10, height=10, useDingbats=FALSE)
+p + umap_theme + ggtitle('')
+dev.off()
+
+p1 <- VlnPlot(subset(seurat_obj, DX %in% c('5xFIRE + PBS', '5xFIRE + transplant')), features='nCount_RNA', group.by='SampleID', pt.size=0) + scale_fill_manual(values=color.scheme) +
+geom_boxplot(outlier.shape=NA, width=.25, fill='white') +
+scale_y_continuous(labels=scales::comma) +
+ylab(expression(italic(N)[UMI])) +
+xlab('') + NoLegend() + ggtitle('')
+
+pdf('figures/vlnplot_nUMI_samples_transplants.pdf', width=8, height=3)
+p1
+dev.off()
+
+
+################################################################################
+# UMAP colored by sample:
+#################################################################################
+
+p1 <- DimPlot(seurat_obj, group.by='SampleID', split.by='DX', ncol=3, reduction='paga_umap') +
+  scale_color_manual(values=color.scheme) +  umap_theme + guides(color = guide_legend(override.aes = list(size=3))) + NoLegend() + ggtitle('')
+
+
+png(paste0(fig_dir, 'umap_samples.png'), width=10, height=6, res=600, units='in')
+p1
+dev.off()
+
+################################################################################
+# UMAP colored by Sex
+#################################################################################
+
+p1 <- DimPlot(seurat_obj, group.by='Sex', reduction='paga_umap') +
+  scale_color_manual(values=c('goldenrod1', 'dodgerblue')) +  umap_theme + guides(color = guide_legend(override.aes = list(size=3))) + NoLegend()
+
+
+png(paste0(fig_dir, 'umap_sex.png'), width=7, height=6, res=600, units='in')
+p1
+dev.off()
 
 
 ```

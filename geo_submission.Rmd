@@ -1,0 +1,263 @@
+
+```{r eval=FALSE}
+
+# conda activate spatial
+
+library(Seurat)
+library(tidyverse)
+
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
+
+
+# only keep relevant meta-data columns:
+seurat_obj@meta.data <- seurat_obj@meta.data %>% select(-c(orig.ident, X, cell_barcode, species, umi_count, umi_count_50dup, gene_count, SampleID, ID, X5x, PS19, FIRE.Csf1R, Inj, RNA.Date, Nuclei.Date, Randomize, group, RNA_snn_res.1, seurat_clusters, pANN_0.25_0.09_4170, DF.classifications_0.25_0.09_4170, DF.classifications_0.25_0.09_4000, Doublet, RNA_snn_res.0.7, leiden_res0.7, leiden_res1.5, cortical_layer, DX_cluster, RNA.Concentration))
+
+# save
+saveRDS(seurat_obj, file='~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/seurat_filtered_analyzed.rds')
+
+# save the seurat metadata as its own file, with all treatment & sample info etc
+seurat_obj@meta.data %>% write.table(file='~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/cell_metadata.txt', sep='\t', quote=FALSE, row.names=FALSE)
+
+# save the genes.tsv, barcodes.tsv, and matrix.mtx files:
+rownames(seurat_obj) %>% write.table(file='~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/genes.tsv', sep='\t', quote=FALSE, row.names=FALSE, col.names=FALSE)
+
+colnames(seurat_obj) %>% write.table(file='~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/barcodes.tsv', sep='\t', quote=FALSE, row.names=FALSE, col.names=FALSE)
+
+mat <- GetAssayData(seurat_obj, slot='counts')
+Matrix::writeMM(mat, file='~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/matrix.mtx')
+
+```
+
+md5sums for p
+```{r eval=FALSE}
+
+# conda activate spatial
+library(tools)
+library(future.apply)
+library(tidyverse)
+plan(multicore)
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/")
+
+
+################################################################################
+# processed data
+################################################################################
+
+files <- paste0('processed/', dir('processed/'))
+checksums <- future_sapply(files, md5sum)
+
+file_df <- data.frame(
+  "file" = files,
+  "checksum" = as.character(checksums),
+  stringsAsFactors=FALSE
+)
+
+
+################################################################################
+# fastqs
+################################################################################
+
+files <- paste0('fastqs/', dir('fastqs/'))
+checksums <- future_sapply(files, md5sum)
+
+file_df <- data.frame(
+  "file" = files,
+  "file type" = 'fastq',
+  "file checksum" = as.character(checksums),
+  'instrument model' = 'Illumina NovaSeq S4',
+  'read length' = 151,
+  'single or paired-end' = 'paired-end',
+  stringsAsFactors=FALSE
+)
+
+write.table(file_df, file='splitseq_info.tsv', sep='\t', quote=FALSE, row.names=FALSE)
+
+```
+
+Make paired-end table
+
+```{r eval=FALSE}
+
+files <- paste0('fastqs/', dir('fastqs/'))
+files <- files[grepl('READ1', files)]
+
+paired_df <- data.frame(
+  'file name 1' = files,
+  'file name 2' = gsub('READ1', 'READ2', files)
+)
+
+write.table(paired_df, file='paired-end_info.tsv', sep='\t', quote=FALSE, row.names=FALSE)
+
+```
+
+Sample information
+
+```{r eval=FALSE}
+
+sample_meta <- read.csv('~/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/splitseq_meta.csv')
+
+sample_meta$Sample_name <- paste('Sample', 1:nrow(sample_meta))
+sample_meta$title <- sample_meta$SampleID
+sample_meta$source_name <- 'mouse brain'
+sample_meta$organism <- 'Mus musculus'
+sample_meta$molecule <- 'nuclear RNA'
+sample_meta$description <- 'unbiased total nuclei isolation'
+
+sample_meta <- sample_meta %>% select(-c(RNA.Nuclei.Group, ID, X5x, PS19, FIRE.Csf1R, Sac, Dissection.Batch, Inj, RNA.Date, RNA.Concentration, Randomize, Nuclei.Date))
+
+sample_meta <- sample_meta %>% select(c(Sample_name, title, source_name, organism, Age, Sex, DX, RIN, molecule, description))
+
+# add lines for raw / processed files:
+raw_files <- paste0('fastqs/', dir('fastqs/'))
+processed_files <- paste0('processed/', dir('processed/'))
+
+
+for(i in 1:length(processed_files)){
+  sample_meta[[paste0('processed_data_file_', i)]] <- processed_files[i]
+}
+
+for(i in 1:length(raw_files)){
+  sample_meta[[paste0('raw_data_file_', i)]] <- raw_files[i]
+}
+
+write.table(sample_meta, file='sample_info.tsv', sep='\t', quote=FALSE, row.names=FALSE)
+
+
+```
+
+
+
+Get sample level information
+
+```{r eval=FALSE}
+# conda activate spatial
+library(tools)
+library(future.apply)
+library(tidyverse)
+plan(multicore)
+
+setwd("/dfs3b/swaruplab/smorabit/data/AD_single-cell_2019/geo_submission")
+
+################################################################################
+# snRNA-seq
+################################################################################
+
+raw_files <- dir('snRNA-seq')
+
+# load sample meta
+sample_meta <- read.csv('sample_meta/snRNA_sample_meta.csv', stringsAsFactors=FALSE)
+rownames(sample_meta) <- sample_meta$Sample.ID
+
+# get the sample names:
+samples <- paste0('Sample-', do.call(rbind, str_split(raw_files, '-'))[,2]) %>% unique
+
+df_names <- c(names(sample_meta), rep('processed data file', 2), rep('raw file', 24))
+
+# get the files that are associated with each sample:
+df <- data.frame()
+for(sample in samples){
+
+  cur_df <- sample_meta[sample,] %>% as.character
+
+  # add processed files:
+  cur_df <- c(cur_df, 'processed/snRNA-seq/filtered_feature_bc_matrix.h5', 'processed/snRNA-seq/cell_meta.csv')
+
+  # get raw files
+  cur_df <- c(cur_df, paste0('snRNA-seq/', raw_files[grep(sample, raw_files)]))
+
+  df <- rbind(df, t(as.data.frame(cur_df)))
+
+}
+colnames(df) <- df_names
+
+# write output:
+write.csv(df, 'sample_meta/snRNA_geo_samples.csv', quote=FALSE, row.names=FALSE)
+
+
+################################################################################
+# snATAC-seq
+################################################################################
+
+raw_files <- dir('snATAC-seq')
+
+# load sample meta
+sample_meta <- read.csv('sample_meta/snATAC_sample_meta.csv', stringsAsFactors=FALSE)
+rownames(sample_meta) <- sample_meta$Sample.ID
+
+# get the sample names:
+samples <- do.call(rbind, str_split(raw_files, '_'))[,1] %>% unique
+
+
+# get the files that are associated with each sample:
+df <- data.frame()
+df_names <- c(names(sample_meta), rep('processed data file', 2), rep('raw file', 4))
+sample_meta <- sample_meta %>% subset(!(Sample.ID %in% c('Sample-100',  'Sample-43',  'Sample-45',  'Sample-96')))
+samples <- samples[!(samples %in% c('Sample-100',  'Sample-43',  'Sample-45',  'Sample-96'))]
+rownames(sample_meta) <- gsub('-', '', rownames(sample_meta))
+for(sample in samples){
+  print(sample)
+  cur_df <- sample_meta[sample,] %>% as.character
+  cur_df <- c(cur_df, 'processed/snATAC-seq/filtered_feature_bc_matrix.h5', 'processed/snATAC-seq/cell_meta.csv')
+  cur_df <- c(cur_df, paste0('snATAC-seq/', raw_files[grep(sample, raw_files)]))
+
+  df <- rbind(df, t(as.data.frame(cur_df)))
+
+}
+colnames(df) <- df_names
+write.csv(df, 'sample_meta/snATAC_geo_samples1.csv', quote=FALSE, row.names=FALSE)
+
+
+df <- data.frame()
+df_names <- c(names(sample_meta), rep('processed data file', 2), rep('raw file', 16))
+sample_meta <- sample_meta %>% subset((Sample.ID %in% c('Sample-100',  'Sample-43',  'Sample-45',  'Sample-96')))
+samples <- samples[(samples %in% c('Sample-100',  'Sample-43',  'Sample-45',  'Sample-96'))]
+for(sample in samples){
+  print(sample)
+  cur_df <- sample_meta[sample,] %>% as.character
+  cur_df <- c(cur_df, 'processed/snATAC-seq/filtered_feature_bc_matrix.h5', 'processed/snATAC-seq/cell_meta.csv')
+  cur_df <- c(cur_df, paste0('snATAC-seq/', raw_files[grep(sample, raw_files)]))
+
+  df <- rbind(df, t(as.data.frame(cur_df)))
+
+}
+colnames(df) <- df_names
+write.csv(df, 'sample_meta/snATAC_geo_samples2.csv', quote=FALSE, row.names=FALSE)
+
+################################################################################
+# bulk RNA-seq
+################################################################################
+
+raw_files <- dir('bulkRNA/')
+samples <- do.call(rbind, str_split(raw_files, '[.]'))[,1] %>% unique
+
+# load sample meta
+sample_meta <- read.csv('sample_meta/bulkRNA_sample_meta.csv', stringsAsFactors=FALSE)
+rownames(sample_meta) <- sample_meta$title
+sample_meta$Sample.ID <- sample_meta$title
+
+
+df_names <- c(names(sample_meta), rep('processed data file', 1), rep('raw file', 2))
+
+# get the files that are associated with each sample:
+df <- data.frame()
+for(sample in samples){
+
+  cur_df <- sample_meta[sample,] %>% as.character
+
+  # add processed files:
+  cur_df <- c(cur_df, 'processed/bulk-RNA-seq/bulkRNA_processed.rda')
+
+  # get raw files
+  cur_df <- c(cur_df, paste0('bulkRNA/', raw_files[grep(paste0(sample, '[.]'), raw_files)]))
+
+  df <- rbind(df, t(as.data.frame(cur_df)))
+
+}
+colnames(df) <- df_names
+
+# write output:
+write.csv(df, 'sample_meta/bulkRNA_geo_samples.csv', quote=FALSE, row.names=FALSE)
+
+
+```

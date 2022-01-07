@@ -50,6 +50,29 @@ seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/F
 # color scheme:
 load('../4-conditions/data/color_scheme_4-conditions_celltype.rda')
 
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
 ```
 
 Process each of the 6 conditions as their own CellChat object:
@@ -166,6 +189,22 @@ for(i in 1:length(cellchat_list)){
   print(plotGeneExpression(cellchat_list[[i]], signaling = pathways.show, color.use=celltype_colors) + plot_annotation(title=names(cellchat_list)[i]))
 }
 dev.off()
+
+
+# seurat violin plot:
+genes <- c('Tgfb1', 'Tgfb2', 'Tgfb3', 'Tgfbr1', 'Acvr1b', 'Acvr1c', 'Acvr1', 'Tgfbr2')
+
+Idents(seurat_obj) <- seurat_obj$cellchat_clusters
+
+
+p <- StackedVlnPlot(seurat_obj, features = genes, split.by='DX') + RestoreLegend() +
+scale_fill_manual(values=sample_color.scheme)
+
+pdf(paste0(fig_dir, 'signaling/', name, '_violin_seurat.pdf'), width=14, height=7)
+p
+dev.off()
+
+
 
 # VEGF pathway: ################################################################
 names(cellchat_list)

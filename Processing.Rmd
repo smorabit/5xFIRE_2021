@@ -123,7 +123,8 @@ seurat_obj$DX <- factor(
   levels = c('WT', '5xFAD', 'FIRE', '5xFIRE', '5xFIRE + PBS', '5xFIRE + transplant')
 )
 
-
+# save the unprocessed & unfiltered seurat object:
+saveRDS(seurat_obj, file='/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_unfiltered_unprocessed_seurat.rds')
 
 #################################################################################
 # plot the number of cells per sample before filtering:
@@ -179,9 +180,9 @@ dev.off()
 filter <- !(seurat_obj$nCount_RNA > 20000 | seurat_obj$percent.mt > 5)
 table(filter)
 
-# same filter as rosenberg et al data
-filter <- !(seurat_obj$nCount_RNA > 5000 | seurat_obj$percent.mt > 1 | seurat_obj$nFeature_RNA > 2500 | seurat_obj$nFeature_RNA < 250)
-table(filter)
+# # same filter as rosenberg et al data
+# filter <- !(seurat_obj$nCount_RNA > 5000 | seurat_obj$percent.mt > 1 | seurat_obj$nFeature_RNA > 2500 | seurat_obj$nFeature_RNA < 250)
+# table(filter)
 
 
 seurat_filtered <- seurat_obj[,filter]
@@ -383,6 +384,23 @@ dev.off()
 
 ```
 
+Plot srebf1 and plp1 in rosenberg data for vivek:
+
+```{r eval=FALSE}
+rosenberg <- readRDS('~/swaruplab/smorabit/collab/Harvard_visium/rosenberg_2018/data/rosenberg_seurat_processed.rds')
+rosenberg$tissue <- ifelse(grepl('brain', rosenberg$sample_type), 'brain', 'spinal')
+
+
+# plot Srebf1 and Plp1 for vivek:
+p <- VlnPlot(rosenberg, group.by='cluster_assignment', features=c('Srebf1', 'Plp1'), split.by='tissue', pt.size=0, combine=FALSE)
+p <- VlnPlot(seurat_obj, group.by='clusternum_anno', features=c('Srebf1', 'Plp1'), pt.size=0, combine=FALSE) + NoLegend()
+
+pdf(paste0(fig_dir, 'vlnplot_rosenberg_srebf1.pdf'), width=16, height=6)
+p
+dev.off()
+
+```
+
 
 Rosenberg label transfer
 
@@ -390,6 +408,8 @@ Rosenberg label transfer
 ```{r eval=FALSE}
 
 rosenberg <- readRDS('~/swaruplab/smorabit/collab/Harvard_visium/rosenberg_2018/data/rosenberg_brain_seurat_processed.rds')
+
+
 
 # keep genes in rosenberg that are in seurat_obj:
 rosenberg <- rosenberg[rownames(rosenberg)[rownames(rosenberg) %in% rownames(seurat_obj)],]
@@ -415,7 +435,7 @@ dev.off()
 # transfer anchors between ros and seurat_obj:
 anchors <- FindTransferAnchors(
   reference = rosenberg,
-  query = seurat_objssh h
+  query = seurat_obj
 )
 saveRDS(anchors, 'data/anchors.rds')
 anchors <- readRDS('data/anchors.rds')
@@ -708,7 +728,7 @@ seurat_imm <- AddModuleScore(
 )
 
 
-comparisons <- list(c(2,4), c(1,3), c(1,2), c(6,2))
+comparisons <- list(c(2,4), c(1,3), c(6,2), c(6,1))
 
 p1 <- VlnPlot(seurat_imm, features='homeostatic3', group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
 geom_hline(yintercept = 0, linetype='dashed') +
@@ -736,6 +756,65 @@ pdf(paste0(fig_dir, 'vlnplot_DAM_DX_with_transplant.pdf'), width=8, height=4)
 p1 | p2 | p3
 dev.off()
 
+################################################################################
+# make violin plots for individual DAM genes
+################################################################################
+
+
+# homeostatic
+plot_list <- list()
+for(cur_gene in homeostatic){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_with_transplant_homeostatic.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
+
+# stage1_DAM
+plot_list <- list()
+for(cur_gene in stage1_DAM){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_with_transplant_stage1.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
+
+
+# stage2_DAM
+plot_list <- list()
+for(cur_gene in stage2_DAM){
+  print(cur_gene)
+  plot_list[[cur_gene]] <- VlnPlot(seurat_imm, features=cur_gene, group.by='DX', pt.size=0) + scale_fill_manual(values=sample_color.scheme) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  stat_summary(fun.data='mean_cl_boot', color='black') +
+  stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
+  xlab('') + NoLegend() + ylim(c(0,6))
+
+}
+
+pdf(paste0(fig_dir, 'vlnplot_DAM_DX_with_transplant_stage2.pdf'), width=4, height=4)
+for(p in plot_list){
+  print(p)
+}
+dev.off()
 
 
 ```
@@ -790,8 +869,41 @@ dev.off()
 
 ```
 
+Pericyte Subclusters?
+
+```{r eval=FALSE}
+
+seurat_per <- seurat_obj %>% subset(class == 'PER')
+
+seurat_per <- RunPCA(seurat_per)
+seurat_per <- RunHarmony(seurat_per, dims=1:20, group.by='SampleID')
+seurat_per <- RunUMAP(seurat_per, reduction='harmony', dims = 1:30, n.neighbors=15L, min.dist=0.25)
+seurat_per <- FindNeighbors(seurat_per, dims=1:15, reduction='harmony', annoy.metric='cosine')
+seurat_per<- FindClusters(seurat_per, resolution = 0.1, algorithm=4)
 
 
+p1 <- DimPlot(seurat_per,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
+  umap_theme
+
+pdf(paste0(fig_dir, 'umap_pericyte_subclusters.pdf'), width=5, height=5)
+p1
+dev.off()
+
+
+# marker genes from wyss-coray lab paper:?
+pericyte_genes <- c(
+  'Slc6a1', 'Slc1a3', 'Slc12a7', 'Slc6a12', 'Slc6a13',
+  'Col4a1-4', 'Lamc3', 'Adamts1', 'Adamts9'
+)
+
+p <- DotPlot(seurat_per, features=markers) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(viridis(256))) + ylab('') + xlab('')
+
+
+pdf(paste0(fig_dir, 'dotplot_pericyte_subclusters_markers.pdf'), width=5, height=4)
+p
+dev.off()
+
+```
 
 
 

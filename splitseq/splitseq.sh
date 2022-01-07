@@ -6,60 +6,40 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --error=slurm-%J.err
-#SBATCH --mem 64G
-#SBATCH --array=0-15
+#SBATCH --mem 128G
+#SBATCH --array=0-7
 #SBATCH --time=72:00:00
-
-# conda init bash
-# conda activate splitseq
 
 # activate conda env:
 source /opt/apps/anaconda/2020.07/etc/profile.d/conda.sh
 conda activate splitseq
 
+# load samtools and star on HPC
 module load samtools
 module load star
 
-# move to fire mouse directory
+# move to the project directory
 cd /dfs3b/swaruplab/smorabit/data/FIRE_mouse_2021/
 
 # set data and reference directories
-fastqs="./expdata/"
-ref_dir="./genomes/mm10/"
+fastqs="./expdata_combined/"
+ref_dir="./genomes/mm10_mRNA/"
 
 let index="$SLURM_ARRAY_TASK_ID"
-#let index="0"
 
 # find current sublibrary
-sublibraries=($(ls $fastqs | cut -d '-' -f 1-5 | uniq))
+sublibraries=($(ls $fastqs | cut -d '-' -f 1 | uniq))
 sample=${sublibraries[$index]}
 
 # make output dir for this sample
 mkdir ./analysis/$sample
 
-
-# splitpipe/split-pipe \
-#   --mode all \
-#   --nthreads 16 \
-#   --genome_dir $ref_dir \
-#   --fq1 $fastqs$sample-READ1-Sequences.txt.gz \
-#   --fq2 $fastqs$sample-READ2-Sequences.txt.gz \
-#   --output_dir analysis/$sample \
-#   --sample A-2 A12-A13 \
-#   --sample F-5 B12-B13 \
-#   --sample A-7 C12-C13 \
-#   --sample D-2 D12-D13
-#
-#
-
-
-# this one didn't work
 splitpipe/split-pipe \
   --mode all \
-  --nthreads 16 \
+  --nthreads 32 \
   --genome_dir $ref_dir \
-  --fq1 $fastqs$sample-READ1-Sequences.txt.gz \
-  --fq2 $fastqs$sample-READ2-Sequences.txt.gz \
+  --fq1 $fastqs$sample-READ1.fastq.gz \
+  --fq2 $fastqs$sample-READ2.fastq.gz \
   --output_dir analysis/$sample \
   --sample D-1 A1-A1 \
   --sample D-7 A2-A2 \
@@ -110,17 +90,16 @@ splitpipe/split-pipe \
   --sample A-5 D11-D11 \
   --sample D-2 D12-D12
 
-#
-#
 
+################################################################################
+# format reference transcriptome
+################################################################################
 
-#
-# # makr pre-mrna
+# # make pre-mrna .gtf like we do for 10X cellranger analysis
 # GTF="Mus_musculus.GRCm38.93.gtf"
 # awk 'BEGIN{FS="\t"; OFS="\t"} $3 == "transcript"{ $3="exon"; print}' $GTF > Mus_musculus.GRCm38.93.premrna.gtf
-#
-#
-# # # make pre-mRNA reference
+
+#  make pre-mRNA reference using split-pipe mkref
 # splitpipe/split-pipe \
 # --mode mkref \
 # --genome mm10 \
@@ -128,7 +107,7 @@ splitpipe/split-pipe \
 # --genes /data/homezvol1/smorabit/swaruplab/smorabit/data/FIRE_mouse_2021/genomes/Mus_musculus.GRCm38.93.premrna.gtf.gz \
 # --output_dir ./genomes/mm10
 
-# make mRNA reference
+# make mRNA reference using split-pipe mkref
 # splitpipe/split-pipe \
 # --mode mkref \
 # --genome mm10 \

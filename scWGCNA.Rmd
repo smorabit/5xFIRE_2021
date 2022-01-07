@@ -281,7 +281,7 @@ Construct dendrogram
 #EX, INH
 softPower=6
 
-# ASC, EX, INH cluster
+# ASC,
 softPower=8
 
 # END
@@ -360,6 +360,9 @@ PCvalues=MEs
 
 table(moduleColors)
 
+# save all of the necessary WGCNA stuff:
+save(moduleLabels, moduleColors, MEs, KMEs, PCvalues, file=paste0('data/', cur_celltype, '_WGCNA_variables.rda'))
+
 ```
 
 
@@ -379,6 +382,10 @@ dev.off()
 
 ```{r eval=FALSE}
 
+# re-load stuff
+load(file=paste0('data/', cur_celltype, '_WGCNA_variables.rda'))
+geneInfo <- read.csv(paste0(data_dir, cur_celltype, '_geneInfoSigned.csv'), stringsAsFactors=FALSE)
+
 library(ggpubr)
 
 #################################################################
@@ -387,16 +394,20 @@ library(ggpubr)
 
 plot_df <- cbind(dplyr::select(targets, c(class, DX)), PCvalues)
 plot_df <- melt(plot_df, id.vars = c('class', 'DX'))
-plot_df$DX <- factor(plot_df$DX, levels=rev(levels(seurat_obj$DX)))
+plot_df$DX <- factor(plot_df$DX, levels=levels(seurat_obj$DX))
 
 # remove gray from plot:
 plot_df <- subset(plot_df, variable != 'MEgrey')
 
-comparisons <- list(c(2,1), c(5,3),  c(3,1), c(5,1))
+#comparisons <- list(c(2,1), c(5,3),  c(3,1), c(5,1))
+comparisons <- list(c(6,5), c(6,4),  c(4,2), c(6,2))
+
 
 
 p <- ggplot(plot_df, aes(x=DX, y=value, fill=DX)) +
-  geom_boxplot(notch=FALSE) +
+  geom_jitter(shape=16, position=position_jitter(0.2), aes(color=value), alpha=0.8) +
+  scale_color_gradient2(low=scales::muted('blue'), mid='lightgrey', high=scales::muted('red')) +
+  geom_boxplot(notch=FALSE, alpha=0.8, outlier.shape=NA) +
   scale_fill_manual(values=sample_color.scheme) +
   RotatedAxis() + ylab('Module Eigengene') + xlab('') +
   theme(
@@ -416,7 +427,9 @@ for(module in unique(plot_df$variable)){
 
   cur <- subset(plot_df, variable == module)
   p <- ggplot(cur, aes(x=DX, y=value, fill=DX)) +
-    geom_boxplot(notch=FALSE) +
+    geom_jitter(shape=16, position=position_jitter(0.2), aes(color=value), alpha=0.8) +
+    scale_color_gradient2(low=scales::muted('blue'), mid='lightgrey', high=scales::muted('red')) +
+    geom_boxplot(notch=FALSE, alpha=0.8, outlier.shape=NA) +
     scale_fill_manual(values=sample_color.scheme) +
     stat_compare_means(method='wilcox', comparisons=comparisons, label='p.signif') +
     RotatedAxis() + ylab('Module Eigengene') + xlab('') + NoLegend() +
@@ -509,7 +522,8 @@ for(i in 1:length(uniquemodcolors)){
   print(i)
 	thismod= uniquemodcolors[i]
   thisInfo=geneInfo[geneInfo$Initially.Assigned.Module.Color==thismod,]
-  geneNames=as.character(thisInfo$GeneSymbol)
+  thisInfo=thisInfo[,c('GeneSymbol', paste0('kME', thismod))]
+  geneNames <- top_n(thisInfo, 100) %>% .$GeneSymbol %>% as.character
   enriched <- enrichr(geneNames,dbs)
 
   for(db in names(enriched)){
@@ -712,8 +726,14 @@ dir.create(paste0('figures/', cur_celltype, '/featureplots'))
 
 
 # load scWGCNA modules #########################################################
-# cur_celltype <- 'ASC'
+cur_celltype <- 'ASC'
+cur_celltype <- 'END'
+cur_celltype <- 'EX'
+cur_celltype <- 'INH'
+cur_celltype <- 'ODC'
 
+
+fig_dir <- paste0('figures/', cur_celltype, '/')
 
 print(cur_celltype)
 geneInfo <- read.csv(paste0(data_dir, cur_celltype, '_geneInfoSigned.csv'), stringsAsFactors=FALSE)
@@ -769,10 +789,10 @@ library(reshape2)
 library(ComplexHeatmap)
 
 # get module scores from snRNA data
-module_df <- subset(seurat_obj@meta.data, class == cur_celltype)
+# module_df <- subset(seurat_obj@meta.data, class == cur_celltype)
 
 # all clusters:
-module_df <- seurat_obj@meta.data; group <- 'all_clusters'; w = 18; h=6;
+module_df <- seurat_obj@meta.data; group <- 'all_clusters'; w = 12; h=4;
 # module_df <- subset(seurat_obj@meta.data, class == cur_celltype); group <- paste0(cur_celltype, '_clusters'); w=6; h=6;
 
 
@@ -807,12 +827,10 @@ zScore <- function(x){(x - mean(x)) /sd(x)}
 matrix_z <- apply(plot_df, 1, zScore) %>% t()
 matrix_z <- matrix_z[,order(colnames(matrix_z))]
 
-# re-order clusters for ODC cluster:
-# matrix_z <- matrix_z[,c('ODC13', 'ODC8', 'ODC12', 'ODC10', 'ODC5', 'ODC3', 'ODC7', 'ODC6', 'ODC11', 'ODC2', 'ODC9', 'ODC1', 'ODC4')]
-
 # keep full values to plot onto the heatmap
 matrix_full <- matrix_z
-matrix_anno <- ifelse(matrix_full >= quantile(matrix_full, 0.80), signif(matrix_full,2), '')
+# matrix_anno <- ifelse(matrix_full >= quantile(matrix_full, 0.80), signif(matrix_full,2), '')
+matrix_anno <- ifelse(abs(matrix_full) >= 2, signif(matrix_full,2), '')
 
 # change the range
 range(matrix_z)
@@ -846,6 +864,10 @@ row_ha <- rowAnnotation(
   )
 )
 
+bottom_anno <- HeatmapAnnotation(
+  text = anno_text(colnames(matrix_z), rot=45)
+)
+
 
 pdf(paste0(fig_dir, cur_celltype, '_module_heatmap_', group,'.pdf'), width=w, height=h)
 ComplexHeatmap::Heatmap(
@@ -853,10 +875,12 @@ ComplexHeatmap::Heatmap(
   cluster_rows=FALSE,
   cluster_columns=FALSE,
   left_annotation = row_ha,
+  bottom_annotation = bottom_anno,
   use_raster = TRUE,
   cell_fun = function(j,i,x,y,w,h,col){
-    grid.text(matrix_anno[i,j], x, y)
-  }
+    grid.text(matrix_anno[i,j], x, y, gp=gpar(fontsize=10))
+  },
+  show_column_names=FALSE
 )
 dev.off()
 

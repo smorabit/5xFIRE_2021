@@ -1,0 +1,32 @@
+#!/bin/bash
+
+#SBATCH --job-name=geo_rna    ## Name of the job.
+#SBATCH -p standard          ## partition/queue name
+#SBATCH -A vswarup_lab           ## partition/queue name
+#SBATCH --nodes=1            ## (-N) number of nodes to use
+#SBATCH --ntasks=1          ## (-n) number of tasks to launch
+#SBATCH --cpus-per-task=1    ## number of cores the job needs
+#SBATCH --error=slurm-%J.err ## error log file
+#SBATCH --mem 8G
+#SBATCH --array=1
+#SBATCH --time=96:00:00
+
+# ncftpput -F -R -z -u geoftp -p "rebUzyi1" ftp-private.ncbi.nlm.nih.gov ./uploads/smorabit@orcid_svAvoECU ./test_dir
+
+# login to the GEO server:
+# sftp geoftp@sftp-private.ncbi.nlm.nih.gov
+
+
+source ~/.bashrc
+conda activate geo_submission
+
+# data_dir="/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/"
+data_dir="/dfs3b/swaruplab/smorabit/data/FIRE_mouse_2021/expdata/"
+
+ncftpput -F -R -z -u geoftp -p "rebUzyi1" ftp-private.ncbi.nlm.nih.gov ./uploads/smorabit@uci.edu_YBwJqkq4/fastqs/ $data_dir/*
+
+# upload the meta table
+#ncftpput -F -R -z -u geoftp -p "rebUzyi1" ftp-private.ncbi.nlm.nih.gov ./uploads/smorabit@uci.edu_YBwJqkq4/ ~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/geo_submission_fire-sk.xlsx
+
+# upload the processed data
+ncftpput -F -R -z -u geoftp -p "rebUzyi1" ftp-private.ncbi.nlm.nih.gov ./uploads/smorabit@uci.edu_YBwJqkq4/processed/ ~/swaruplab/smorabit/analysis/FIRE_mouse_2021/geo_upload/data/processed/

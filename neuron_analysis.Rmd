@@ -1,0 +1,288 @@
+
+Analysis of just neuronal populations:
+
+```{r eval=FALSE}
+
+# in bash terminal:
+# conda activate spatial
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(presto)
+library(harmony)
+library(ggpubr)
+library(DoubletFinder)
+library(RColorBrewer)
+library(ggrepel)
+library(patchwork)
+colfunc <- colorRampPalette(rev(brewer.pal(11, 'Spectral' )))
+prediction.colfunc <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+
+theme_set(theme_cowplot())
+
+# setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/hardcore_filtering/")
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/neuronal_analysis/")
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load:
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+```
+
+Create one Seurat object for EX neurons and one for INH
+
+
+```{r eval=FALSE}
+
+seurat_ex <- seurat_obj %>% subset(class == 'EX')
+seurat_inh <- seurat_obj %>% subset(class == 'INH')
+
+# droplevels for clusters etc:
+seurat_ex$clusternum_anno <- droplevels(seurat_ex$clusternum_anno)
+
+saveRDS(seurat_ex, paste0(data_dir, 'FIRE_mouse_seurat_EX.rds'))
+saveRDS(seurat_inh, paste0(data_dir, 'FIRE_mouse_seurat_INH.rds'))
+
+```
+
+Marker Gene analysis for EX
+
+```{r eval=FALSE}
+
+################################################################################
+# EX marker genes:
+################################################################################
+
+seurat_ex$clusternum_anno <- droplevels(seurat_ex$clusternum_anno)
+
+Idents(seurat_ex) <- seurat_ex$clusternum_anno
+markers <- FindAllMarkers(
+  seurat_ex,
+  only.pos=TRUE,
+  min.pct=0.2,
+  logfc.threshold=0.5,
+  test.use='wilcox'
+)
+
+markers$FDR <- p.adjust(markers$p_val, 'fdr')
+save(markers, file=paste0(data_dir, 'EX_marker_DEGs.rda'))
+
+write.csv(markers, file=paste0(data_dir, 'EX_marker_DEGs.csv'), quote=FALSE, row.names=TRUE)
+
+
+################################################################################
+# INH marker genes:
+################################################################################
+
+seurat_inh$clusternum_anno <- droplevels(seurat_inh$clusternum_anno)
+
+Idents(seurat_inh) <- seurat_inh$clusternum_anno
+markers <- FindAllMarkers(
+  seurat_inh,
+  only.pos=TRUE,
+  min.pct=0.2,
+  logfc.threshold=0.5,
+  test.use='wilcox'
+)
+
+markers$FDR <- p.adjust(markers$p_val, 'fdr')
+save(markers, file=paste0(data_dir, 'INH_marker_DEGs.rda'))
+
+write.csv(markers, file=paste0(data_dir, 'INH_marker_DEGs.csv'), quote=FALSE, row.names=TRUE)
+
+
+```
+
+plot marker genes:
+
+```{r eval=FALSE}
+
+# settings for cluster DEGs
+cur_file <-"EX_marker_DEGs.csv"
+clusters <- 'clusternum_anno'
+w=14; h=16; ncols=5
+dw=10; dh=10; # width and height for dot plots
+
+# create output dir:
+name = 'EX_markers'
+dir.create(paste0(fig_dir, name))
+cur_degs <- read.csv(paste0(data_dir, cur_file), stringsAsFactors=FALSE)
+cur_degs <- dplyr::rename(cur_degs, c(group=cluster))
+
+# get color scheme:
+p <- DimPlot(seurat_obj, group.by=clusters, reduction='umap', label=T)
+g <- ggplot_build(p)
+colors <- g$data[[1]]["colour"]
+groups <- g$data[[1]]['group']
+color_df <- unique(data.frame(colors, groups)) %>% arrange(group)
+color_df$group <- unique(seurat_obj@meta.data[,clusters])
+color_scheme <- color_df$colour
+names(color_scheme) <- color_df$group
+
+
+################################################################################
+# Volcano Plots
+################################################################################
+
+# get genes to annotate:
+cur_degs <- Reduce(rbind, lapply(unique(cur_degs$group), function(x){
+  cur <- subset(cur_degs, group == x)
+
+  top_thresh <- cur %>% subset(p_val_adj <= 0.05) %>%top_n(5, wt=avg_logFC) %>% .$avg_logFC %>% min
+
+  cur$anno <- ifelse(cur$p_val_adj <= 0.05 & cur$avg_logFC >= top_thresh, cur$gene, NA)
+  cur$color <- ifelse(cur$avg_logFC > 0 & cur$p_val_adj <= 0.05, color_scheme[cur$group %>% unique %>% as.character], 'gray')
+  cur
+}))
+
+# plot as a volcano plot faceted by group
+p <- ggplot(cur_degs, aes(x=avg_logFC, y=-log10(p_val_adj))) +
+   geom_hline(yintercept=-log10(0.05), linetype='dashed') +
+   geom_point(alpha=0.5, color=cur_degs$color) +
+   geom_point(inherit.aes=FALSE, data=subset(cur_degs, !is.na(anno)), aes(avg_logFC, -log10(p_val_adj)),fill=subset(cur_degs, !is.na(anno)) %>% .$color, shape=21, size=2, color='black') +
+   scale_color_manual(values=color_scheme) +
+   geom_text_repel(aes(label=anno), color='black', fontface='italic',  min.segment.length=0) +
+   xlim(-1*max(abs(cur_degs$avg_logFC))-0.1, max(abs(cur_degs$avg_logFC))+0.1) +
+   facet_wrap( ~ group, scales='free', ncol=ncols) +
+   ggtitle(paste0('Marker genes')) +
+   theme(
+     panel.grid.major = element_blank(),
+     plot.title = element_text(hjust = 0.5)
+   ) + NoLegend()
+
+pdf(paste0(fig_dir, name, '/volcano_', name, '_DEGs.pdf'), width=w, height=h, useDingbats=FALSE)
+p
+dev.off()
+
+
+
+################################################################################
+# Dot Plot of top 20 genes
+################################################################################
+
+dir.create(paste0(fig_dir, name, '/dotplots/'))
+
+colfunc <- colorRampPalette(c(rev(brewer.pal(9, 'Purples' )[2:9]), 'white'))
+
+
+for(cur_group in unique(cur_degs$group)){
+
+  print(cur_group)
+  genes <- cur_degs %>% subset(group == cur_group) %>% top_n(20, wt=avg_logFC) %>% .$gene
+
+  p <- DotPlot(seurat_ex, features=genes, group.by=clusters, dot.min=0.15 ) +
+    RotatedAxis() +
+      scale_color_gradientn(
+      colors=rev(colfunc(256)),
+      guide = guide_colorbar(barwidth=0.5, barheight=20, ticks=FALSE, label=FALSE)
+  ) +
+    ylab('') + xlab('')
+
+
+  out_name <- gsub(' ', '_',  cur_group)
+  out_name <- gsub('/', '_', out_name)
+
+  pdf(paste0(fig_dir, name, '/dotplots/', out_name, '_top_genes.pdf'), width=dw, height=dh, useDingbats=FALSE)
+  print(p)
+  dev.off()
+}
+
+################################################################################
+# Hierarchical Clustering of the top 25 DEGs per cluster:
+################################################################################
+library(circlize)
+library(ComplexHeatmap)
+library(dendsort)
+
+top_degs <- markers %>%
+  group_by(cluster) %>%
+  top_n(25, wt=avg_logFC)
+length(unique(top_degs$gene))
+
+Idents(seurat_ex) <- seurat_ex$clusternum_anno
+expression_matrix <- AverageExpression(seurat_ex, features=unique(top_degs$gene))
+expression_matrix <- expression_matrix$RNA
+
+# convert to Z score
+zScore <- function(x){(x - mean(x)) /sd(x)}
+matrix_z <- apply(expression_matrix, 1, zScore) %>% t()
+matrix_z <- matrix_z[,order(colnames(matrix_z))]
+
+# col_fun = colorRamp2(c(range(matrix_z)[1], 0, range(matrix_z)[2]), c("blue", "white", "red"))
+
+cn = colnames(matrix_z)
+
+# set row annotation as selected genes:
+# set annotation list
+gene_anno_list <- top_degs %>% top_n(2, wt=avg_logFC) %>% .$gene %>% unique
+gene_anno_list <- gene_anno_list[gene_anno_list %in% rownames(matrix_z)]
+
+ha = rowAnnotation(foo = anno_mark(at = unlist(lapply(gene_anno_list, function(gene){which(rownames(matrix_z) == gene)})), labels = gene_anno_list))
+
+
+# hierarchical clustering:
+row_dend = dendsort(hclust(dist(matrix_z)))
+col_dend = dendsort(hclust(dist(t(matrix_z))))
+
+# plot heatmap
+pdf(paste0(fig_dir, 'EX_DEG_heatmap.pdf'), width=11, height=15)
+ComplexHeatmap::Heatmap(
+  matrix_z, show_column_names = FALSE, show_row_names=FALSE,
+  # col = col_fun,
+  cluster_rows=row_dend,
+  bottom_annotation = HeatmapAnnotation(
+      text = anno_text(cn, rot = 45, location = unit(1, "npc"), just = "right"),
+      annotation_height = max_text_width(cn)
+  ),
+  right_annotation = ha,
+  use_raster = TRUE
+)
+dev.off()
+
+################################################################################
+# Heatmap of top 5 genes per group
+################################################################################
+
+
+```

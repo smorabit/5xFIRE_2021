@@ -1,0 +1,141 @@
+
+```{r eval=FALSE}
+
+
+# in bash terminal:
+# conda activate cicero
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(RColorBrewer)
+library(ggrepel)
+library(patchwork)
+colfunc <- colorRampPalette(rev(brewer.pal(11, 'Spectral' )))
+prediction.colfunc <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+
+theme_set(theme_cowplot())
+
+setwd("/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/hardcore_filtering/")
+
+# directories
+data_dir <- "data/"
+fig_dir <- 'figures/'
+
+
+umap_theme <- theme(
+  axis.line=element_blank(),
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  axis.title.x=element_blank(),
+  axis.title.y=element_blank(),
+  panel.background=element_blank(),
+  panel.border=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  plot.background=element_blank()
+)
+
+# re-load data :
+seurat_obj <- readRDS('/dfs3b/swaruplab/smorabit/analysis/FIRE_mouse_2021/data/FIRE_mouse_seurat.rds')
+
+# color scheme:
+load('../4-conditions/data/color_scheme_4-conditions_celltype.rda')
+
+
+# color scheme for samples:
+color.scheme <- c(
+  brewer.pal(9, 'Reds')[2:9],
+  brewer.pal(9, 'Purples')[2:9],
+  brewer.pal(9, 'Oranges')[2:9],
+  brewer.pal(9, 'Greys')[2:9],
+  brewer.pal(9, 'Blues')[2:9],
+  brewer.pal(9, 'Greens')[2:9]
+)
+names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
+
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+# color scheme from Sep:
+sample_color.scheme <- c(
+  rgb(139,171,211, maxColorValue=255),
+  rgb(9,153,99, maxColorValue=255),
+  rgb(176,127,192, maxColorValue=255),
+  rgb(7,126,151, maxColorValue=255),
+  rgb(87,87,249, maxColorValue=255),
+  rgb(184,86,215, maxColorValue=255)
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+
+```
+
+
+MapQuery with Rosenberg et al dataset:
+
+```{r eval=FALSE}
+
+
+rosenberg <- readRDS('~/swaruplab/smorabit/collab/Harvard_visium/rosenberg_2018/data/rosenberg_brain_seurat_processed.rds')
+
+
+
+# keep genes in rosenberg that are in seurat_obj:
+rosenberg <- rosenberg[rownames(rosenberg)[rownames(rosenberg) %in% rownames(seurat_obj)],]
+
+# compute UMAP for rosenberg:
+rosenberg <- RunUMAP(rosenberg, reduction='pca', dims = 1:30, n.neighbors=15L, min.dist=0.1, return.model=TRUE)
+
+p1 <- DimPlot(rosenberg, group.by='cluster_assignment', label=TRUE, raster=FALSE) + umap_theme + NoLegend()
+
+pdf(paste0(fig_dir, 'umap_clusters_rosenberg.pdf'), width=12, height=12)
+p1
+dev.off()
+
+
+# transfer anchors between ros and seurat_obj:
+
+anchors <- FindTransferAnchors(
+    reference = rosenberg,
+    query = seurat_obj,
+    dims = 1:30,
+    reference.reduction = "pca"
+)
+saveRDS(anchors, 'data/mapquery_anchors.rds')
+anchors <- readRDS('data/mapquery_anchors.rds')
+
+
+seurat_obj <- MapQuery(
+  anchorset = anchors,
+  reference = rosenberg,
+  query = seurat_obj,
+  refdata = list(cluster = "cluster_assignment"),
+  reference.reduction = "pca",
+  reduction.model = "umap",
+  transferdata.args=list(k.weight=5)
+)
+
+
+p1 <- DimPlot(rosenberg, group.by='cluster_assignment', label=TRUE, raster=FALSE) + umap_theme + NoLegend()
+
+p2 <- DimPlot(seurat_obj, group.by='cellchat_clusters', reduction='ref.umap', label=TRUE, raster=FALSE) + umap_theme + NoLegend()
+
+
+pdf(paste0(fig_dir, 'umap_rosenberg_mapquery.pdf'), width=14, height=7)
+p1 | p2
+dev.off()
+
+
+```
