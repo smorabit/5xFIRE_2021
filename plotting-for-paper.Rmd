@@ -4,7 +4,6 @@ Running locally on laptop:
 ```{r eval=FALSE}
 
 # conda activate r-env
-
 library(Seurat)
 library(tidyverse)
 library(cowplot)

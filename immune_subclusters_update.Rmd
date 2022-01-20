@@ -49,6 +49,22 @@ color.scheme <- c(
 )
 names(color.scheme) <- as.character(levels(seurat_obj$SampleID))
 
+sample_color.scheme <- c(
+  brewer.pal(9, 'Greys')[5],
+  brewer.pal(9, 'Purples')[7],
+  brewer.pal(9, 'Oranges')[6],
+  brewer.pal(9, 'Reds')[6],
+  brewer.pal(9, 'Blues')[5],
+  brewer.pal(9, 'Greens')[5]
+)
+names(sample_color.scheme) <- levels(seurat_obj$DX)
+
+theme_set(theme_cowplot())
+prediction.colfunc <- colorRampPalette(rev(brewer.pal(9, 'Purples' )[2:9]))
+colfunc <- colorRampPalette(rev(brewer.pal(9, 'Greens' )[2:9]))
+
+
+
 ```
 
 Sub-clustering of immune population :
@@ -56,7 +72,7 @@ Sub-clustering of immune population :
 ```{r eval=FALSE}
 
 setwd('hardcore_filtering/immune_subclusters/')
-
+seurat_imm <- readRDS(paste0(data_dir, 'FIRE_mouse_2021_immune_subclusters.rds'))
 
 # isolate immune population
 seurat_imm <- subset(seurat_obj, class == 'IMM')
@@ -104,7 +120,7 @@ markers <- c('Csf1r', 'P2ry12', 'Cx3cr1', 'Mrc1', 'Cd38', 'Lyve1', 'Ms4a7', 'Cd7
 p1 <- DimPlot(seurat_imm,  group.by='seurat_clusters', label=TRUE) + NoLegend()+
   umap_theme
 
-pdf(paste0(fig_dir, 'umap_immune_subclusters.pdf'), width=3, height=3, useDingbats=FALSE)
+pdf(paste0(fig_dir, 'umap_immune_subclusters2.pdf'), width=3, height=3, useDingbats=FALSE)
 p1
 dev.off()
 
@@ -156,7 +172,7 @@ dev.off()
 #################################################################################
 
 
-markers <- c('Csf1r', 'P2ry12', 'Cx3cr1', 'Mrc1', 'Cd38', 'Lyve1', 'Ms4a7', 'Cd74', 'Cd80', 'Cd86', 'Il7r', 'Ccr7', 'Ms4a1', 'Nkg7', 'Cd8a', 'Apoe')
+markers <- c('Csf1r', 'P2ry12', 'Cx3cr1', 'Mrc1', 'Cd38', 'Lyve1', 'Ms4a7', 'Cd74', 'Cd80', 'Cd86', 'Il7r', 'Ccr7', 'Ms4a1', 'Nkg7', 'Cd8a', 'Apoe', 'Lpl', 'Bin1', 'Axl', 'Mertk', 'Ctsd', 'Lgmn', 'Spi1', 'Plcg2', 'Lrp1', 'Abi3', 'Sall1', 'Pdgfb', 'Ctsb', 'Mafb', 'Inpp5d')
 
 
 comparisons  <- list(c(2,4), c(1,3), c(3,4), c(1,2), c(1,4))
@@ -249,6 +265,27 @@ markers$FDR <- p.adjust(markers$p_val, 'fdr')
 save(markers, file=paste0(data_dir, 'cluster_marker_DEGs.rda'))
 load(file=paste0(data_dir, 'cluster_marker_DEGs.rda'))
 
+write.csv(markers, paste0(data_dir, 'cluster_marker_DEGs.csv'), quote=FALSE)
+
+################################################################################
+# DotPlot of the top 20 genes in each cluster
+################################################################################
+
+dir.create(paste0(fig_dir, 'marker_dotplots/'))
+
+groups <- unique(markers$cluster)
+for(cur in groups){
+  print(cur)
+  cur_genes <- markers %>% subset(cluster == cur & FDR < 0.05) %>%
+    top_n(20, wt=avg_logFC) %>% arrange(avg_logFC) %>%.$gene
+
+  p <- DotPlot(seurat_imm, features=cur_genes, scale=TRUE) + coord_flip() + RotatedAxis() + scale_color_gradientn(colors=rev(prediction.colfunc(256))) + ylab('') + xlab('')
+
+  pdf(paste0(fig_dir, 'marker_dotplots/', cur, '_dotplot.pdf'), width=6, height=6, useDingbats=FALSE)
+  print(p)
+  dev.off()
+
+}
 
 ################################################################################
 # Hierarchical Clustering of the top 25 DEGs per cluster:
